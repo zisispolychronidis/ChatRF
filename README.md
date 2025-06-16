@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://i.imgur.com/thoXDHu.png" alt="ChatRF Logo" width="200"/>
+  <img src="https://i.imgur.com/thoXDHu.png" alt="ChatRF Logo" width="80%"/>
 </p>
 
 # ChatRF – AI-Enhanced Ham Radio Repeater
