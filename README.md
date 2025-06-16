@@ -58,7 +58,7 @@ ChatRF is structured in a mostly modular way, allowing for:
 - Adding new DTMF actions without modifying the core repeater loop heavily.
 - Independent development of AI, repeater logic, audio playback, and other services.
 
-## 🇬🇷 Language Support
+## 🌍 Language Support
 
 - Originally designed for Greek-speaking amateur radio operators.
 - Can be easily changed to use almost any language.
