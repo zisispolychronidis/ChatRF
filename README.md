@@ -1,78 +1,96 @@
 <p align="center">
-  <img src="https://i.imgur.com/thoXDHu.png" alt="ChatRF Logo" width="80%"/>
+  <img src="https://i.imgur.com/thoXDHu.png" alt="ChatRF – AI Ham Radio Repeater Logo" width="80%"/>
 </p>
 
 # ChatRF – AI-Enhanced Ham Radio Repeater
 
-**ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant. Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather info, satellite pass predictions, callsign lookups, and more—all through standard radio equipment and a computer (Raspberry Pi is supported).
+**ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant. Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more — all through standard RF equipment and a local computer (e.g., Raspberry Pi). It runs fully offline with a local LLM.
+
+---
 
 ## 📡 What is ChatRF?
 
-ChatRF is a hybrid hardware-software project for a ham radio repeater that can:
-- Act as a regular RF repeater system.
-- Transmit station identification (CW ID) automatically.
-- Accept DTMF commands for running different tasks.
-- Answer amateur radio and general knowledge questions using a local LLM.
-- Provide a framework for different applications, accessible through an amateur radio repeater system.
+ChatRF is a hybrid hardware-software repeater controller that:
+- Functions as a traditional RF repeater.
+- Transmits automatic CW ID.
+- Responds to DTMF touch-tone commands for live interaction.
+- Offers conversational responses using a **local** LLM (default: `gemma3` via Ollama).
+- Serves as a flexible framework for ham-related features accessible by voice.
+
+---
 
 ## 🎯 Core Features
 
 ### ✅ Repeater System
-- Detects audio presence and forwards transmission with configurable silence detection.
-- Periodically transmits callsign in Morse code.
-- Responds to DTMF touch-tone commands for dynamic control.
+- Detects and forwards incoming transmissions with optional silence detection.
+- Periodic Morse code ID.
+- Interacts via DTMF for feature control.
 
 ### 🤖 AI Assistant ("AI Mode")
-- Records and transcribes user speech using `faster-whisper`.
-- Generates responses with Ollama using a local LLM (default: `gemma3`).
-- Speaks responses back using `espeak-ng`.
-- Plays a gentle “thinking melody” while processing.
-- Automatically cancels after inactivity or silence.
-- Uses a custom system prompt tailored for ham radio topics.
+- Records and transcribes voice using `faster-whisper`.
+- Generates replies with a local LLM using Ollama.
+- Speaks responses via `espeak-ng`.
+- Plays a calming “thinking melody” during processing.
+- Automatically exits on silence or timeout.
+- Custom system prompt optimized for ham radio conversations.
 
-### 🌐 Additional Modules
-- **Callsign Lookup**: Extracts and decodes phonetic/numeric speech into callsigns and checks against RadioID database.
-- **Satellite Tracking**: Uses Skyfield and real-time TLEs to predict upcoming AOS events.
-- **Band Condition Reports**: Fetches current solar and band propagation data from hamqsl.com.
-- **Weather**: Retrieves weather reports using the OpenWeatherMap API.
-- **Voice Output**: Uses `espeak-ng` for all text-to-speech tasks.
+### 🌐 Modules
+- **Callsign Lookup**: Translates phonetic input into callsigns, then checks against the RadioID database.
+- **Satellite Tracking**: Uses Skyfield + TLEs to report upcoming satellite passes.
+- **HF Band Conditions**: Pulls solar/propagation info from hamqsl.com.
+- **Weather Reports**: Via OpenWeatherMap API.
+- **Voice Output**: All responses spoken using `espeak-ng`.
 
-### 🔢 Default DTMF Command Menu
-| DTMF Tone | Action                         |
-|----------:|--------------------------------|
-| `*`       | Toggle AI Assistant            |
-| `#`       | Play menu overview             |
-| `0`       | Repeater information           |
-| `1`       | Current time & date            |
-| `2`       | Local weather forecast         |
-| `3`       | HF band conditions             |
-| `4`       | Random fun fact                |
-| `5`       | Callsign lookup via speech     |
-| `6`       | Next satellite pass predictions |
-| `7`       | Play a random meme audio 😂       |
+---
 
-## 🔧 Modular Design
+## 🔢 DTMF Command Menu
 
-ChatRF is structured in a mostly modular way, allowing for:
-- Easy extension or customization of new features.
-- Adding new DTMF actions without modifying the core repeater loop heavily.
-- Independent development of AI, repeater logic, audio playback, and other services.
+| DTMF Tone | Action                          |
+|----------:|---------------------------------|
+| `*`       | Toggle AI Assistant             |
+| `#`       | Playback help menu              |
+| `0`       | System information              |
+| `1`       | Current time & date             |
+| `2`       | Local weather forecast          |
+| `3`       | HF band conditions              |
+| `4`       | Random fun fact                 |
+| `5`       | Callsign lookup (speech input)  |
+| `6`       | Satellite pass predictions      |
+| `7`       | Random meme sound 😂             |
+
+---
+
+## 🛠 Modular Design
+
+- Easy to extend — plug in your own DTMF features.
+- Independent modules for audio, logic, AI, etc.
+- Designed with maintainability and experimentation in mind.
+
+---
 
 ## 🌍 Language Support
 
-- Originally designed for Greek-speaking amateur radio operators.
-- Can be easily changed to use almost any language.
-- Prioritizes clear, concise phrasing optimized for voice transmission over RF.
-
-## 📖 Installation & Setup
-
-Installation instructions, hardware requirements, audio wiring, and deployment tips will be available in the project's **GitHub Wiki**.
+- Default language: Greek.
+- Easy to customize for any spoken language.
+- AI responses are phrased for maximum intelligibility over radio.
 
 ---
 
-### 📡 Developed by SV2TMT — Zisis Polychronidis  
-This project is part of an ongoing effort to explore the fusion of modern AI with traditional ham radio technology. Made by young people for the future generation of ham radio operators!
+## 📦 Installation & Setup
+
+All setup instructions, wiring diagrams, and deployment guidance are provided in the project's **GitHub Wiki**.
 
 ---
 
-Feel free to suggest improvements, contribute, or fork it to create your own AI repeater system!
+## 🤝 Contributions
+
+Pull requests are welcome! If you'd like to contribute a module or bugfix, please open an issue or submit a PR.
+
+---
+
+### 📡 Developed by SV2TMT — Zisis Polychronidis
+
+This is part of an ongoing exploration of merging cutting-edge AI with classic ham radio principles.  
+**Made by young hams, for the future of amateur radio.**
+
+---
