@@ -4,7 +4,24 @@
 
 # ChatRF – AI-Enhanced Ham Radio Repeater
 
-**ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant. Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more — all through standard RF equipment and a local computer (e.g., Raspberry Pi). It runs fully offline with a local LLM.
+**ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant.
+Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more — all through standard RF equipment and a local computer (e.g., Raspberry Pi).
+It runs fully offline with a local LLM.
+
+### 📚 Table of Contents
+
+- [What is ChatRF?](#-what-is-chatrf)
+- [Core Features](#-core-features)
+  - [Repeater System](#-repeater-system)
+  - [AI Assistant ("AI Mode")](#-ai-assistant-ai-mode)
+  - [Modules](#-modules)
+- [DTMF Command Menu](#-dtmf-command-menu)
+- [Modular Design](#-modular-design)
+- [Language Support](#-language-support)
+- [Installation & Setup](#-installation--setup)
+- [License](#-license)
+- [Contributions](#-contributions)
+- [Developed by](#-developed-by-sv2tmt--zisis-polychronidis)
 
 ---
 
@@ -30,8 +47,8 @@ ChatRF is a hybrid hardware-software repeater controller that:
 - Records and transcribes voice using `faster-whisper`.
 - Generates replies with a local LLM using Ollama.
 - Speaks responses via `espeak-ng`.
-- Plays a calming “thinking melody” during processing.
-- Automatically exits on silence or timeout.
+- Plays a “thinking melody” during processing.
+- Automatically exits on timeout.
 - Custom system prompt optimized for ham radio conversations.
 
 ### 🌐 Modules
@@ -49,14 +66,14 @@ ChatRF is a hybrid hardware-software repeater controller that:
 |----------:|---------------------------------|
 | `*`       | Toggle AI Assistant             |
 | `#`       | Playback help menu              |
-| `0`       | System information              |
+| `0`       | Repeater information            |
 | `1`       | Current time & date             |
 | `2`       | Local weather forecast          |
 | `3`       | HF band conditions              |
 | `4`       | Random fun fact                 |
 | `5`       | Callsign lookup (speech input)  |
 | `6`       | Satellite pass predictions      |
-| `7`       | Random meme sound 😂             |
+| `7`       | Random meme sound 😂            |
 
 ---
 
