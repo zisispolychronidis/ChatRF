@@ -60,7 +60,6 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 - **Weather Reports**: Via OpenWeatherMap API.
 - **Voice Output**: All responses spoken using `espeak-ng`.
 
-Developers can easily add their own modules!
 ---
 
 ## 🔢 DTMF Command Menu
