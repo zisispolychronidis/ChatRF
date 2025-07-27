@@ -5,8 +5,7 @@
 # ChatRF – AI-Enhanced Ham Radio Repeater
 
 **ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant.
-Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more — all through standard RF equipment and a local computer (e.g., Raspberry Pi).
-It runs fully offline with a local LLM.
+Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more, all through standard RF equipment and a local computer (e.g., Raspberry Pi).
 
 ### 📚 Table of Contents
 
@@ -16,8 +15,6 @@ It runs fully offline with a local LLM.
   - [AI Assistant ("AI Mode")](#-ai-assistant-ai-mode)
   - [Modules](#-modules)
 - [DTMF Command Menu](#-dtmf-command-menu)
-- [Modular Design](#-modular-design)
-- [Language Support](#-language-support)
 - [Installation & Setup](#-installation--setup)
 - [License](#-license)
 - [Contributions](#-contributions)
@@ -27,37 +24,43 @@ It runs fully offline with a local LLM.
 
 ## 📡 What is ChatRF?
 
-ChatRF is a hybrid hardware-software repeater controller that:
-- Functions as a traditional RF repeater.
+ChatRF is a software controller for repeater systems that:
+- Allows traditional RF repeater functionality.
 - Transmits automatic CW ID.
 - Responds to DTMF touch-tone commands for live interaction.
 - Offers conversational responses using a **local** LLM (default: `gemma3` via Ollama).
 - Serves as a flexible framework for ham-related features accessible by voice.
+
+### ❓ Why ChatRF?
+
+Ham radio has always been about innovation, but repeaters have barely changed since the 90s. ChatRF brings smart interaction to the airwaves, letting hams access real-time information, converse with an LLM, and explore modular features entirely over RF, without the internet.
 
 ---
 
 ## 🎯 Core Features
 
 ### ✅ Repeater System
-- Detects and forwards incoming transmissions with optional silence detection.
+- Detects and forwards incoming transmissions with changeable silence detection.
 - Periodic Morse code ID.
 - Interacts via DTMF for feature control.
 
 ### 🤖 AI Assistant ("AI Mode")
 - Records and transcribes voice using `faster-whisper`.
 - Generates replies with a local LLM using Ollama.
-- Speaks responses via `espeak-ng`.
+- Runs entirely offline — no internet required once set up.
+- Speaks responses via `Piper` (or `espeak-ng` as fallback).
 - Plays a “thinking melody” during processing.
 - Automatically exits on timeout.
 - Custom system prompt optimized for ham radio conversations.
 
 ### 🌐 Modules
-- **Callsign Lookup**: Translates phonetic input into callsigns, then checks against the RadioID database.
+- **Callsign Lookup**: Translates phonetic alphabet input into callsigns, then checks against the RadioID database.
 - **Satellite Tracking**: Uses Skyfield + TLEs to report upcoming satellite passes.
 - **HF Band Conditions**: Pulls solar/propagation info from hamqsl.com.
 - **Weather Reports**: Via OpenWeatherMap API.
 - **Voice Output**: All responses spoken using `espeak-ng`.
 
+Developers can easily add their own modules!
 ---
 
 ## 🔢 DTMF Command Menu
@@ -95,13 +98,15 @@ ChatRF is a hybrid hardware-software repeater controller that:
 
 ## 📦 Installation & Setup
 
-All setup instructions, wiring diagrams, and deployment guidance are provided in the project's **GitHub Wiki**.
+All setup instructions, development guidance, wiring diagrams, and deployment guidance are provided in the project's **GitHub Wiki**.
 
 ---
 
 ## 🤝 Contributions
 
 Pull requests are welcome! If you'd like to contribute a module or bugfix, please open an issue or submit a PR.
+
+Also, if you end up using this for your own ham radio station, I'd love to see it!
 
 ---
 
