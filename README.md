@@ -99,7 +99,7 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 
 ## 📦 Installation & Setup
 
-All setup instructions, development guidance, wiring diagrams, and deployment guidance are provided in the project's **GitHub Wiki**.
+All setup instructions, development guidance, wiring diagrams, and deployment guidance are going to be provided in the project's **GitHub Wiki**.
 
 ---
 
