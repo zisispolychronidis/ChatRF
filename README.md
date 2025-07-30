@@ -7,6 +7,8 @@
 **ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant.
 Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more, all through standard RF equipment and a local computer (e.g., Raspberry Pi).
 
+The current version is very early but includes all features mentioned below.
+
 ### 📚 Table of Contents
 
 - [What is ChatRF?](#-what-is-chatrf)
@@ -48,7 +50,7 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 - Records and transcribes voice using `faster-whisper`.
 - Generates replies with a local LLM using Ollama.
 - Runs entirely offline — no internet required once set up.
-- Speaks responses via `Piper` (or `espeak-ng` as fallback).
+- Speaks responses via `espeak-ng` (will update to `Piper` soon).
 - Plays a “thinking melody” during processing.
 - Automatically exits on timeout.
 - Custom system prompt optimized for ham radio conversations.
