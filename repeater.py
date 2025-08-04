@@ -7,6 +7,7 @@ import subprocess
 import os
 import logging
 import random
+from piper import PiperVoice
 from dtmf import detect_dtmf
 from pydub import AudioSegment
 from pydub.playback import play
@@ -75,6 +76,10 @@ class RepeaterConfig:
         '4': "....-", '5': ".....", '6': "-....", '7': "--...", '8': "---..", 
         '9': "----.", '0': "-----"
     }
+    
+    # Piper TTS Settings
+    PIPER_MODEL_PATH = "models/el_GR-rapunzelina-low.onnx"
+    PIPER_TEMP_AUDIO = "audio/temp/piper_temp.wav"
     
     # Weather config
     OPENWEATHER_API_KEY = "your_api_key_here"    
@@ -145,6 +150,10 @@ class HamRepeater:
         self.input_stream = None
         self.output_stream = None
         self._setup_audio_streams()
+        
+        # Initialize Piper voice
+        self.piper_voice = None
+        self._load_piper_voice()
         
     def _setup_audio_streams(self):
         """Initialize audio input and output streams"""
@@ -439,6 +448,95 @@ class HamRepeater:
                     os.remove(file)
                 except OSError as e:
                     logger.warning(f"Could not remove {file}: {e}")
+                    
+    def _load_piper_voice(self):
+        """Load Piper voice model"""
+        try:
+            if os.path.exists(self.config.PIPER_MODEL_PATH):
+                self.piper_voice = PiperVoice.load(self.config.PIPER_MODEL_PATH)
+                logger.info(f"Piper voice loaded: {self.config.PIPER_MODEL_PATH}")
+            else:
+                logger.warning(f"Piper model not found: {self.config.PIPER_MODEL_PATH}")
+                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-low'")
+        except Exception as e:
+            logger.error(f"Failed to load Piper voice: {e}")
+            self.piper_voice = None
+    
+    def _split_sentences(self, text):
+        """Split text into sentences for better TTS flow"""
+        import re
+        
+        # Greek and English sentence endings
+        sentence_endings = r'[.!?;]'
+        
+        # Split on sentence endings but keep the punctuation
+        sentences = re.split(f'({sentence_endings})', text)
+        
+        # Recombine punctuation with sentences
+        result = []
+        for i in range(0, len(sentences), 2):
+            if i + 1 < len(sentences):
+                sentence = (sentences[i] + sentences[i + 1]).strip()
+            else:
+                sentence = sentences[i].strip()
+            
+            if sentence:  # Only add non-empty sentences
+                result.append(sentence)
+        
+        # Fallback: split very long texts at commas
+        if len(result) <= 1 and len(text) > 150:
+            parts = text.split(',')
+            current = ""
+            result = []
+            for part in parts:
+                if len(current + part) > 80 and current:
+                    result.append(current.strip())
+                    current = part
+                else:
+                    current += ("," if current else "") + part
+            
+            if current.strip():
+                result.append(current.strip())
+        
+        return result if result else [text]
+
+    def speak_with_piper(self, text):
+        """Convert text to speech using Piper"""
+        if not self.piper_voice:
+            logger.error("Piper voice not loaded")
+            return False
+        
+        try:
+            # Split text into sentences for better flow
+            sentences = self._split_sentences(text)
+            logger.info(f"Speaking {len(sentences)} sentence(s)")
+            
+            for i, sentence in enumerate(sentences):
+                if not sentence.strip():
+                    continue
+                
+                temp_file = f"audio/temp/piper_temp_{i}.wav"
+                
+                # Generate speech to WAV file
+                with wave.open(temp_file, "wb") as wav_file:
+                    self.piper_voice.synthesize_wav(sentence, wav_file)
+                
+                # Play the generated audio file
+                self.play_audio(temp_file)
+                
+                # Small pause between sentences (except for the last one)
+                if i < len(sentences) - 1:
+                    time.sleep(0.3)  # 300ms pause between sentences
+                
+                # Clean up temp file
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error with Piper TTS: {e}")
+            return False
     
     def run_ai_mode(self):
         """Run AI mode subprocess with proper monitoring"""
@@ -847,10 +945,7 @@ class HamRepeater:
                                         if facts:
                                             fact = random.choice(facts)
                                             logger.info(f"Speaking fun fact: {fact}")
-
-                                            subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/temp_fact.wav', fact])
-                                            self.play_audio("audio/temp/temp_fact.wav")
-                                            os.remove("audio/temp/temp_fact.wav")
+                                            self.speak_with_piper(fact)
                                         else:
                                             logger.warning("fun_facts.txt is empty")
                                     else:
@@ -917,9 +1012,7 @@ class HamRepeater:
 
                                     logger.info(f"Speaking time and date: {full_phrase}")
 
-                                    subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/phrase.wav', full_phrase])
-                                    self.play_audio("audio/temp/phrase.wav")
-                                    os.remove("audio/temp/phrase.wav")
+                                    self.speak_with_piper(full_phrase)
 
                                 except Exception as e:
                                     logger.error(f"Error during time and date playback: {e}")
@@ -973,9 +1066,7 @@ class HamRepeater:
                                             forecast = "Δεν μπόρεσα να ανακτήσω τα δεδομένα καιρού."
 
                                     logger.info(f"Speaking weather: {forecast}")
-                                    subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/forecast.wav', forecast])
-                                    self.play_audio("audio/temp/forecast.wav")
-                                    os.remove("audio/temp/forecast.wav")
+                                    self.speak_with_piper(forecast)
 
                                 except Exception as e:
                                     logger.error(f"Error during weather playback: {e}")
@@ -1031,9 +1122,7 @@ class HamRepeater:
                                         )
 
                                         logger.info(f"Speaking band conditions: {full_report}")
-                                        subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/report.wav', full_report])
-                                        self.play_audio("audio/temp/report.wav")
-                                        os.remove("audio/temp/report.wav")
+                                        self.speak_with_piper(full_report)
                                     else:
                                         logger.warning("Failed to fetch band condition XML data")
                                 except Exception as e:
@@ -1168,9 +1257,7 @@ class HamRepeater:
                                         spoken = "Οι επόμενες διελεύσεις είναι: " + ", ".join(spoken_parts) + " ώρα Ελλάδος."
 
                                     logger.info(f"Speaking satellite passes: {spoken}")
-                                    subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/temp_sat.wav', spoken])
-                                    self.play_audio("audio/temp/temp_sat.wav")
-                                    os.remove("audio/temp/temp_sat.wav")
+                                    self.speak_with_piper(spoken)
 
                                 except Exception as e:
                                     logger.error(f"Error during satellite pass playback: {e}")
@@ -1204,9 +1291,7 @@ class HamRepeater:
                                             message = f"Δεν βρέθηκε το διακριτικό {' '.join(callsign_text)}."
 
                                     logger.info(f"Speaking lookup result: {message}")
-                                    subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/message.wav', message])
-                                    self.play_audio("audio/temp/message.wav")
-                                    os.remove("audio/temp/message.wav")
+                                    self.speak_with_piper(message)
                                     
                                     # Clean up audio file
                                     if os.path.exists(audio_file):
@@ -1216,9 +1301,7 @@ class HamRepeater:
                                     logger.error(f"Error during callsign lookup: {e}")
                                     # Play error message
                                     error_msg = "Σφάλμα κατά την αναζήτηση διακριτικού."
-                                    subprocess.run(['espeak-ng', '-v', 'el', '-s', '145', '-w', 'audio/temp/error.wav', error_msg])
-                                    self.play_audio("audio/temp/error.wav")
-                                    os.remove("audio/temp/error.wav")
+                                    self.speak_with_piper(error)
                                 finally:
                                     self.lookup_callsign = False
 
