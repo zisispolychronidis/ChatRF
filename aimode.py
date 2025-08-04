@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timedelta
 from faster_whisper import WhisperModel
 from contextlib import contextmanager
+from piper import PiperVoice
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -45,17 +46,9 @@ class AIConfig:
     MAX_CONTEXT_MESSAGES = 20  # Maximum number of messages to keep in context
     CONTEXT_TIMEOUT_MINUTES = 30  # Clear context after this many minutes of inactivity
     
-    # TTS Settings
-    TTS_VOICE = "el"  # Greek voice for espeak-ng
-
-class ConversationContext:
-    """Manages conversation context and history"""
-    
-    def __init__(self, config):
-        self.config = config
-        self.messages = []
-        self.last_activity = datetime.now()
-        self.load_context()
+    # Piper TTS Settings
+    PIPER_MODEL_PATH = "models/el_GR-rapunzelina-low.onnx"
+    PIPER_TEMP_AUDIO = "audio/temp/piper_ai_temp.wav"
     
     def load_system_prompt(self):
         """Load system prompt from file"""
@@ -68,6 +61,15 @@ class ConversationContext:
         except Exception as e:
             logger.error(f"Error loading system prompt: {e}")
             return "Είσαι ένας AI βοηθός ενσωματωμένος σε έναν ραδιοερασιτεχνικό σταθμό (ham radio) που βρίσκεται στις Σέρρες, Ελλάδα. Ο κύριος ρόλος σου είναι να βοηθάς τους ραδιοερασιτέχνες απαντώντας σε ερωτήσεις."
+
+class ConversationContext:
+    """Manages conversation context and history"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.messages = []
+        self.last_activity = datetime.now()
+        self.load_context()
     
     def load_context(self):
         """Load conversation context from file"""
@@ -311,6 +313,8 @@ class HamRadioAI:
         self.typing_sound = TypingSound(self.config)
         self.context = ConversationContext(self.config)
         self._initialize_models()
+        self.piper_voice = None
+        self._load_piper_voice()
     
     def _initialize_models(self):
         """Initialize AI models and audio system"""
@@ -505,7 +509,7 @@ class HamRadioAI:
             return None
         
         try:
-            logger.info("Generating AI response with context...")
+            logger.info("Generating AI response...")
             
             # Typing sound should already be running from transcription
             
@@ -542,41 +546,126 @@ class HamRadioAI:
         finally:
             # Stop typing sound after AI response is generated
             self.typing_sound.stop()
+            
+    def play_audio(self, filename):
+        """Play a WAV file through the audio output"""
+        try:
+            with wave.open(filename, 'rb') as wf:
+                audio_stream = self.pyaudio_instance.open(
+                    format=self.pyaudio_instance.get_format_from_width(wf.getsampwidth()),
+                    channels=wf.getnchannels(),
+                    rate=wf.getframerate(),
+                    output=True
+                )
+                
+                chunk_size = 1024
+                data = wf.readframes(chunk_size)
+                while data:
+                    audio_stream.write(data)
+                    data = wf.readframes(chunk_size)
+                
+                audio_stream.close()
+                
+        except FileNotFoundError:
+            logger.error(f"Audio file {filename} not found!")
+        except Exception as e:
+            logger.error(f"Error playing audio file {filename}: {e}")
     
+    def _load_piper_voice(self):
+        """Load Piper voice model"""
+        try:
+            if os.path.exists(self.config.PIPER_MODEL_PATH):
+                self.piper_voice = PiperVoice.load(self.config.PIPER_MODEL_PATH)
+                logger.info(f"Piper voice loaded: {self.config.PIPER_MODEL_PATH}")
+            else:
+                logger.warning(f"Piper model not found: {self.config.PIPER_MODEL_PATH}")
+                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-low'")
+        except Exception as e:
+            logger.error(f"Failed to load Piper voice: {e}")
+            self.piper_voice = None
+            
+    def _split_sentences(self, text):
+        """Split text into sentences for better TTS flow"""
+        import re
+        
+        # Greek and English sentence endings
+        sentence_endings = r'[.!?;]'
+        
+        # Split on sentence endings but keep the punctuation
+        sentences = re.split(f'({sentence_endings})', text)
+        
+        # Recombine punctuation with sentences
+        result = []
+        for i in range(0, len(sentences), 2):
+            if i + 1 < len(sentences):
+                sentence = (sentences[i] + sentences[i + 1]).strip()
+            else:
+                sentence = sentences[i].strip()
+            
+            if sentence:  # Only add non-empty sentences
+                result.append(sentence)
+        
+        # Fallback: split very long texts at commas
+        if len(result) <= 1 and len(text) > 150:
+            parts = text.split(',')
+            current = ""
+            result = []
+            for part in parts:
+                if len(current + part) > 80 and current:
+                    result.append(current.strip())
+                    current = part
+                else:
+                    current += ("," if current else "") + part
+            
+            if current.strip():
+                result.append(current.strip())
+        
+        return result if result else [text]
+        
     def speak_text(self, text):
-        """Convert text to speech using espeak-ng"""
+        """Convert text to speech using Piper with sentence splitting"""
         if not text or not text.strip():
             logger.warning("Empty text provided for TTS")
             return False
         
+        if not self.piper_voice:
+            logger.error("Piper voice not loaded")
+            return False
+        
         try:
-            logger.info("Converting text to speech...")
+            logger.info("Converting text to speech with Piper...")
             
             # Ensure typing sound is stopped before TTS
             self.typing_sound.stop()
             
-            # Use espeak-ng for Greek TTS
-            result = subprocess.run(
-                ["espeak-ng", "-v", self.config.TTS_VOICE, text],
-                capture_output=True,
-                text=True,
-                timeout=30  # Timeout after 30 seconds
-            )
+            # Split text into sentences for better flow
+            sentences = self._split_sentences(text)
+            logger.info(f"Speaking {len(sentences)} sentence(s)")
             
-            if result.returncode == 0:
-                logger.info("Text-to-speech completed successfully")
-                return True
-            else:
-                logger.error(f"espeak-ng failed with return code {result.returncode}")
-                logger.error(f"stderr: {result.stderr}")
-                return False
+            for i, sentence in enumerate(sentences):
+                if not sentence.strip():
+                    continue
                 
-        except subprocess.TimeoutExpired:
-            logger.error("Text-to-speech timeout")
-            return False
-        except FileNotFoundError:
-            logger.error("espeak-ng not found. Please install espeak-ng.")
-            return False
+                temp_file = f"audio/temp/piper_ai_temp_{i}.wav"
+                
+                # Generate speech to WAV file
+                with wave.open(temp_file, "wb") as wav_file:
+                    self.piper_voice.synthesize_wav(sentence, wav_file)
+                
+                # Play the generated audio using our play_audio method
+                self.play_audio(temp_file)
+                
+                # Small pause between sentences (except for the last one)
+                if i < len(sentences) - 1:
+                    time.sleep(0.4)  # 400ms pause between sentences for AI responses
+                
+                # Clean up temp file
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            
+            logger.info("Text-to-speech completed successfully")
+            return True
+                
         except Exception as e:
             logger.error(f"Error during text-to-speech: {e}")
             return False
