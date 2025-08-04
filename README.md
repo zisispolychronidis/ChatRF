@@ -50,7 +50,7 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 - Records and transcribes voice using `faster-whisper`.
 - Generates replies with a local LLM using Ollama.
 - Runs entirely offline — no internet required once set up.
-- Speaks responses via `espeak-ng` (will update to `Piper` soon).
+- Speaks responses via `piper-tts`.
 - Plays a “thinking melody” during processing.
 - Automatically exits on timeout.
 - Custom system prompt optimized for ham radio conversations.
@@ -60,7 +60,7 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 - **Satellite Tracking**: Uses Skyfield + TLEs to report upcoming satellite passes.
 - **HF Band Conditions**: Pulls solar/propagation info from hamqsl.com.
 - **Weather Reports**: Via OpenWeatherMap API.
-- **Voice Output**: All responses spoken using `espeak-ng`.
+- **Voice Output**: All responses spoken using `piper-tts`.
 
 ---
 
