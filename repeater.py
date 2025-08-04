@@ -457,7 +457,7 @@ class HamRepeater:
                 logger.info(f"Piper voice loaded: {self.config.PIPER_MODEL_PATH}")
             else:
                 logger.warning(f"Piper model not found: {self.config.PIPER_MODEL_PATH}")
-                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-low'")
+                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-low' and put it in models/")
         except Exception as e:
             logger.error(f"Failed to load Piper voice: {e}")
             self.piper_voice = None
@@ -1349,3 +1349,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
