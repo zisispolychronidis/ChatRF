@@ -2,7 +2,7 @@
   <img src="https://i.imgur.com/thoXDHu.png" alt="ChatRF – AI Ham Radio Repeater Logo" width="80%"/>
 </p>
 
-# ChatRF – AI-Enhanced Ham Radio Repeater
+# ChatRF: AI-Enhanced Ham Radio Repeater
 
 **ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant.
 Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more, all through standard RF equipment and a local computer (e.g., Raspberry Pi).
@@ -55,12 +55,21 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 - Automatically exits on timeout.
 - Custom system prompt optimized for ham radio conversations.
 
-### 🌐 Modules
+### 🌐 Other Modules
 - **Callsign Lookup**: Translates phonetic alphabet input into callsigns, then checks against the RadioID database.
 - **Satellite Tracking**: Uses Skyfield + TLEs to report upcoming satellite passes.
 - **HF Band Conditions**: Pulls solar/propagation info from hamqsl.com.
 - **Weather Reports**: Via OpenWeatherMap API.
 - **Voice Output**: All responses spoken using `piper-tts`.
+
+### 🪄 Launch Arguments
+- `--no-audio-repeat`: Disable audio repeating (monitor mode only)
+- `--no-roger`: Disable roger beep at end of transmission
+- `--no-cw-id`: Disable periodic CW callsign identification
+- `--no-dtmf`: Disable DTMF command listening
+- `--no-ptt`: Disable PTT control via Raspberry Pi GPIO **(REQUIRED on Windows)**
+- `--audio-boost AUDIO_BOOST`: Audio boost factor (default: 5.0)
+- `--threshold THRESHOLD`: Audio detection threshold (default: 500)
 
 ---
 
