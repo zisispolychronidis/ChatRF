@@ -7,6 +7,10 @@ import subprocess
 import os
 import logging
 import random
+import argparse
+import configparser
+import re
+from pathlib import Path
 from piper import PiperVoice
 from dtmf import detect_dtmf
 from pydub import AudioSegment
@@ -36,98 +40,239 @@ def ensure_directories():
 
 class RepeaterConfig:
     """Configuration class for repeater settings"""
-    # Audio Settings
-    FORMAT = pyaudio.paInt16
-    CHANNELS = 1
-    RATE = 44100
-    CHUNK = 1024
-    THRESHOLD = 500
-    SILENCE_TIME = 0.5
-    AUDIO_BOOST = 5.0
-    
-    # Flag paths
-    CANCEL_FILE = "flags/cancel_ai.flag"
-    AI_READY_FILE = "flags/ai_ready.flag"
-    
-    # Audio File Paths
-    LOADING_FILE = "audio/system/loading_loop.wav"
-    DING_FILE = "audio/system/ding.wav"
-    TIMEOUT_FILE = "audio/system/timeout.wav"
-    AI_MODE_FILE = "audio/system/ai_mode.wav"
-    MENU_FILE = "audio/system/menu.wav"
-    REPEATER_INFO_FILE = "audio/system/repeater_info.wav"
-    
-    # CW/Morse Settings
-    TONE_FREQ = 800
-    TONE_DURATION = 0.2
-    TONE_VOLUME = 1.0
-    CALLSIGN = "SV2TMT"
-    CW_WPM = 20
-    CW_FARNSWORTH_WPM = None
-    CW_ID_INTERVAL = 600  # seconds
-    
-    # Morse code dictionary
-    MORSE_DICT = {
-        'A': ".-", 'B': "-...", 'C': "-.-.", 'D': "-..", 'E': ".", 'F': "..-.", 
-        'G': "--.", 'H': "....", 'I': "..", 'J': ".---", 'K': "-.-", 'L': ".-..", 
-        'M': "--", 'N': "-.", 'O': "---", 'P': ".--.", 'Q': "--.-", 'R': ".-.", 
-        'S': "...", 'T': "-", 'U': "..-", 'V': "...-", 'W': ".--", 'X': "-..-",
-        'Y': "-.--", 'Z': "--..", '1': ".----", '2': "..---", '3': "...--", 
-        '4': "....-", '5': ".....", '6': "-....", '7': "--...", '8': "---..", 
-        '9': "----.", '0': "-----"
-    }
-    
-    # Piper TTS Settings
-    PIPER_MODEL_PATH = "models/el_GR-rapunzelina-low.onnx"
-    PIPER_TEMP_AUDIO = "audio/temp/piper_temp.wav"
-    
-    # Weather config
-    OPENWEATHER_API_KEY = "your_api_key_here"    
-    WEATHER_CACHE_FILE = "data/cache/weather_cache.json"
-    WEATHER_CACHE_DURATION = 900  # seconds
-    
-    # Satellite TLEs
-    TLE_URLS = [
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle",
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
-    ]
+    def __init__(self, args=None, config_file='config/settings/config.ini'):
+        self.config = configparser.ConfigParser()
+        
+        # Check if config file exists
+        if not os.path.exists(config_file):
+            logger.warning(f"Config file {config_file} not found! Creating default config...")
+            self._create_default_config(config_file)
+        
+        self.config.read(config_file)
+        
+        # Audio Settings
+        self.FORMAT = pyaudio.paInt16  # This stays hardcoded
+        self.CHANNELS = self.config.getint('Audio', 'channels', fallback=1)
+        self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
+        self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
+        self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
+        self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.5)
+        self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
+        
+        # Feature flags from arguments
+        self.ENABLE_AUDIO_REPEAT = not (args and args.no_audio_repeat)
+        self.ENABLE_ROGER_BEEP = not (args and args.no_roger)
+        self.ENABLE_CW_ID = not (args and args.no_cw_id)
+        self.ENABLE_DTMF = not (args and args.no_dtmf)
+        self.ENABLE_PTT = not (args and args.no_ptt)
+        
+        # Flag paths
+        self.CANCEL_FILE = self.config.get('Paths', 'cancel_file', fallback='flags/cancel_ai.flag')
+        self.AI_READY_FILE = self.config.get('Paths', 'ai_ready_file', fallback='flags/ai_ready.flag')
+        
+        # Audio File Paths
+        self.LOADING_FILE = self.config.get('Paths', 'loading_file', fallback='audio/system/loading_loop.wav')
+        self.DING_FILE = self.config.get('Paths', 'ding_file', fallback='audio/system/ding.wav')
+        self.TIMEOUT_FILE = self.config.get('Paths', 'timeout_file', fallback='audio/system/timeout.wav')
+        self.AI_MODE_FILE = self.config.get('Paths', 'ai_mode_file', fallback='audio/system/ai_mode.wav')
+        self.MENU_FILE = self.config.get('Paths', 'menu_file', fallback='audio/system/menu.wav')
+        self.REPEATER_INFO_FILE = self.config.get('Paths', 'repeater_info_file', fallback='audio/system/repeater_info.wav')
+        self.CALLSIGN_PROMPT_FILE = self.config.get('Paths', 'callsign_prompt_file', fallback='audio/system/callsign_prompt.wav')
+        
+        # CW/Morse Settings
+        self.TONE_FREQ = self.config.getint('CW', 'tone_freq', fallback=800)
+        self.TONE_DURATION = self.config.getfloat('CW', 'tone_duration', fallback=0.2)
+        self.TONE_VOLUME = self.config.getfloat('CW', 'tone_volume', fallback=1.0)
+        self.CALLSIGN = self.config.get('CW', 'callsign', fallback='SV2TMT')
+        self.CW_WPM = self.config.getint('CW', 'wpm', fallback=20)
+        farnsworth = self.config.get('CW', 'farnsworth_wpm', fallback='')
+        self.CW_FARNSWORTH_WPM = int(farnsworth) if farnsworth.strip() else None
+        self.CW_ID_INTERVAL = self.config.getint('CW', 'id_interval', fallback=600)
+        
+        # Morse code dictionary (hardcoded)
+        self.MORSE_DICT = {
+            'A': ".-", 'B': "-...", 'C': "-.-.", 'D': "-..", 'E': ".", 'F': "..-.", 
+            'G': "--.", 'H': "....", 'I': "..", 'J': ".---", 'K': "-.-", 'L': ".-..", 
+            'M': "--", 'N': "-.", 'O': "---", 'P': ".--.", 'Q': "--.-", 'R': ".-.", 
+            'S': "...", 'T': "-", 'U': "..-", 'V': "...-", 'W': ".--", 'X': "-..-",
+            'Y': "-.--", 'Z': "--..", '1': ".----", '2': "..---", '3': "...--", 
+            '4': "....-", '5': ".....", '6': "-....", '7': "--...", '8': "---..", 
+            '9': "----.", '0': "-----"
+        }
+        
+        # Greek hour names (hardcoded)
+        self.GREEK_HOUR_NAMES = {
+            1: "μία",
+            2: "δύο",
+            3: "τρεις",
+            4: "τέσσερις",
+            5: "πέντε",
+            6: "έξι",
+            7: "επτά",
+            8: "οκτώ",
+            9: "εννέα",
+            10: "δέκα",
+            11: "έντεκα",
+            12: "δώδεκα",
+            0: "δώδεκα"
+        }
+        
+        # Piper TTS Settings
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
+        self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_temp.wav')
+        
+        # Weather config
+        self.OPENWEATHER_API_KEY = self.config.get('Weather', 'api_key', fallback='your_api_key_here')
+        self.WEATHER_CITY = self.config.get('Weather', 'city', fallback='Serres,GR')
+        self.WEATHER_CACHE_FILE = self.config.get('Weather', 'cache_file', fallback='data/cache/weather_cache.json')
+        self.WEATHER_CACHE_DURATION = self.config.getint('Weather', 'cache_duration', fallback=900)
+        
+        # Satellite TLEs
+        self.TLE_CACHE_FILE = self.config.get('Satellite', 'tle_cache_file', fallback='data/cache/tle_cache.txt')
+        
+        # Read TLE URLs dynamically
+        self.TLE_URLS = []
+        i = 1
+        while self.config.has_option('Satellite', f'tle_url{i}'):
+            self.TLE_URLS.append(self.config.get('Satellite', f'tle_url{i}'))
+            i += 1
+        
+        # Fallback if no URLs found
+        if not self.TLE_URLS:
+            self.TLE_URLS = [
+                "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
+                "https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle",
+                "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
+            ]
+        
+        # Satellites to track
+        satellites_str = self.config.get('Satellite', 'satellites', 
+                                        fallback='ISS (ZARYA), NOAA 15, NOAA 19, RADFXSAT (FOX-1B), SAUDISAT 1C (SO-50)')
+        self.SATELLITES_TO_TRACK = [s.strip() for s in satellites_str.split(',')]
+        
+        # Callsign database
+        self.RADIOID_CSV_URL = self.config.get('Callsign', 'radioid_csv_url', 
+                                               fallback='https://radioid.net/static/user.csv')
+        self.RADIOID_LOCAL_FILE = self.config.get('Callsign', 'radioid_local_file', 
+                                                  fallback='data/cache/user.csv')
+        self.CALLSIGN_DB_FILE = self.config.get('Callsign', 'database_file',
+                                                fallback='data/databases/callsigns.db')
+        
+        # Location settings
+        self.LATITUDE = self.config.getfloat('Location', 'latitude', fallback=41.08)
+        self.LONGITUDE = self.config.getfloat('Location', 'longitude', fallback=23.55)
+        self.ELEVATION = self.config.getfloat('Location', 'elevation', fallback=50)
+        self.TIMEZONE = self.config.get('Location', 'timezone', fallback='Europe/Athens')
+        
+        # Database paths
+        self.FUN_FACTS_FILE = self.config.get('Database', 'fun_facts_file',
+                                             fallback='data/databases/fun_facts.txt')
+        
+        # Phonetic and number maps (hardcoded)
+        self.PHONETIC_MAP = {
+            # English
+            "alpha": "A", "bravo": "B", "charlie": "C", "delta": "D", "echo": "E", "foxtrot": "F",
+            "golf": "G", "hotel": "H", "india": "I", "juliett": "J", "kilo": "K", "lima": "L",
+            "mike": "M", "november": "N", "oscar": "O", "papa": "P", "quebec": "Q", "romeo": "R",
+            "sierra": "S", "tango": "T", "uniform": "U", "victor": "V", "whiskey": "W",
+            "x-ray": "X", "xray": "X", "yankee": "Y", "zulu": "Z",
+            # Greek/phonetic variants
+            "σιέρα": "S", "βίκτορ": "V", "μάικ": "M", "τάγκο": "T", "λίμα": "L", "νοβέμπερ": "N",
+            "όσκαρ": "O", "πάπα": "P", "κίλο": "K", "τζουλιετ": "J", "γκόλφ": "G", "έκο": "E",
+            "ντέλτα": "D", "γιάνκι": "Y", "ζουλου": "Z"
+        }
 
-    TLE_CACHE_FILE = "data/cache/tle_cache.txt"
-    SATELLITES_TO_TRACK = ["ISS (ZARYA)", "NOAA 15", "NOAA 19", "RADFXSAT (FOX-1B)", "SAUDISAT 1C (SO-50)"]
+        self.GREEK_NUMBER_MAP = {
+            "μηδέν": "0", "ένα": "1", "δύο": "2", "τρία": "3", "τέσσερα": "4",
+            "πέντε": "5", "έξι": "6", "επτά": "7", "οκτώ": "8", "εννέα": "9",
+            "μία": "1", "δυο": "2", "τρεις": "3", "τεσσερα": "4", "εννιά": "9"
+        }
+        
+        self.ENGLISH_NUMBER_MAP = {
+            "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+            "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"
+        }
     
-    # Callsign database
-    RADIOID_CSV_URL = "https://radioid.net/static/user.csv"
-    RADIOID_LOCAL_FILE = "data/cache/user.csv"
-    
-    PHONETIC_MAP = {
-    # English
-    "alpha": "A", "bravo": "B", "charlie": "C", "delta": "D", "echo": "E", "foxtrot": "F",
-    "golf": "G", "hotel": "H", "india": "I", "juliett": "J", "kilo": "K", "lima": "L",
-    "mike": "M", "november": "N", "oscar": "O", "papa": "P", "quebec": "Q", "romeo": "R",
-    "sierra": "S", "tango": "T", "uniform": "U", "victor": "V", "whiskey": "W",
-    "x-ray": "X", "xray": "X", "yankee": "Y", "zulu": "Z",
-
-    # Greek/phonetic variants
-    "σιέρα": "S", "βίκτορ": "V", "μάικ": "M", "τάγκο": "T", "λίμα": "L", "νοβέμπερ": "N",
-    "όσκαρ": "O", "πάπα": "P", "κίλο": "K", "τζούλιετ": "J", "γκόλφ": "G", "έκο": "E",
-    "ντέλτα": "D", "γιάνκι": "Y", "ζουλού": "Z"
-    }
-
-    GREEK_NUMBER_MAP = {
-    "μηδέν": "0", "ένα": "1", "δύο": "2", "τρία": "3", "τέσσερα": "4",
-    "πέντε": "5", "έξι": "6", "επτά": "7", "οκτώ": "8", "εννέα": "9",
-    "μία": "1", "δυο": "2", "τρεις": "3", "τεσσερα": "4", "εννιά": "9"  # alternate spellings
-    }
-    
-    ENGLISH_NUMBER_MAP = {
-    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
-    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"
-    }
+    def _create_default_config(self, config_file):
+        """Create a default config.ini file"""
+        default_config = configparser.ConfigParser()
+        
+        default_config['Audio'] = {
+            'channels': '1',
+            'rate': '44100',
+            'chunk': '1024',
+            'threshold': '500',
+            'silence_time': '0.5',
+            'audio_boost': '5.0'
+        }
+        
+        default_config['Paths'] = {
+            'cancel_file': 'flags/cancel_ai.flag',
+            'ai_ready_file': 'flags/ai_ready.flag',
+            'loading_file': 'audio/system/loading_loop.wav',
+            'ding_file': 'audio/system/ding.wav',
+            'timeout_file': 'audio/system/timeout.wav',
+            'ai_mode_file': 'audio/system/ai_mode.wav',
+            'menu_file': 'audio/system/menu.wav',
+            'repeater_info_file': 'audio/system/repeater_info.wav',
+            'callsign_prompt_file': 'audio/system/callsign_prompt.wav'
+        }
+        
+        default_config['CW'] = {
+            'tone_freq': '800',
+            'tone_duration': '0.2',
+            'tone_volume': '1.0',
+            'callsign': 'SV2TMT',
+            'wpm': '20',
+            'farnsworth_wpm': '',
+            'id_interval': '600'
+        }
+        
+        default_config['Piper'] = {
+            'model_path': 'models/el_GR-rapunzelina-low.onnx',
+            'temp_audio': 'audio/temp/piper_temp.wav'
+        }
+        
+        default_config['Weather'] = {
+            'api_key': 'your_api_key_here',
+            'city': 'Serres,GR',
+            'cache_file': 'data/cache/weather_cache.json',
+            'cache_duration': '900'
+        }
+        
+        default_config['Satellite'] = {
+            'tle_cache_file': 'data/cache/tle_cache.txt',
+            'satellites': 'ISS (ZARYA), NOAA 15, NOAA 19, RADFXSAT (FOX-1B), SAUDISAT 1C (SO-50)',
+            'tle_url1': 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle',
+            'tle_url2': 'https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle',
+            'tle_url3': 'https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle'
+        }
+        
+        default_config['Callsign'] = {
+            'radioid_csv_url': 'https://radioid.net/static/user.csv',
+            'radioid_local_file': 'data/cache/user.csv',
+            'database_file': 'data/databases/callsigns.db'
+        }
+        
+        default_config['Location'] = {
+            'latitude': '41.08',
+            'longitude': '23.55',
+            'elevation': '50',
+            'timezone': 'Europe/Athens'
+        }
+        
+        default_config['Database'] = {
+            'fun_facts_file': 'data/databases/fun_facts.txt'
+        }
+        
+        with open(config_file, 'w') as f:
+            default_config.write(f)
+        
+        logger.info(f"Created default config file: {config_file}")
 
 class HamRepeater:
-    def __init__(self):
-        self.config = RepeaterConfig()
+    def __init__(self, args=None):
+        self.config = RepeaterConfig(args=args)
         self.dt_detected = None
         self.morse_wpm = self.config.CW_WPM
         self.morse_farnsworth_wpm = self.config.CW_FARNSWORTH_WPM
@@ -252,7 +397,7 @@ class HamRepeater:
                    (f" with Farnsworth timing at {farnsworth_wpm} WPM" if farnsworth_wpm else ""))
 
     def play_tone(self, frequency=None, duration=None, volume=None):
-        """Generate and play a tone with proper buffering"""
+        """Generate and play a tone"""
         frequency = frequency or self.config.TONE_FREQ
         duration = duration or self.config.TONE_DURATION
         volume = volume or self.config.TONE_VOLUME
@@ -261,7 +406,7 @@ class HamRepeater:
             # Calculate number of samples
             num_samples = int(self.config.RATE * duration)
             
-            # Generate samples with smooth fade in/out to prevent clicks
+            # Generate samples with smooth fade in/out
             samples = np.sin(2 * np.pi * np.arange(num_samples) * frequency / self.config.RATE)
             
             # Apply fade in/out to prevent audio clicks (5ms fade)
@@ -274,7 +419,7 @@ class HamRepeater:
             
             samples = (volume * samples).astype(np.float32)
             
-            # Use larger buffer size to prevent underruns
+            # Buffer size
             chunk_size = 1024
             
             stream = self.p.open(
@@ -303,7 +448,7 @@ class HamRepeater:
             logger.error(f"Error playing tone: {e}")
 
     def morse_code_tone(self, character, timing):
-        """Play morse code for a single character with calculated timing"""
+        """Play morse code for a single character"""
         morse_pattern = self.config.MORSE_DICT.get(character.upper(), '')
         
         if not morse_pattern:
@@ -319,29 +464,28 @@ class HamRepeater:
             if i < len(morse_pattern) - 1:
                 time.sleep(timing['element_gap'])
 
-    def play_callsign_morse(self, wpm=None, farnsworth_wpm=None):
-        """Optimized version that generates entire callsign audio at once"""
+    def play_text_morse(self, text, wpm=None, farnsworth_wpm=None):
+        """Generate CW audio from text"""
         # Use provided WPM or fall back to instance settings or default
         current_wpm = wpm or getattr(self, 'morse_wpm', 20)
         current_farnsworth = farnsworth_wpm or getattr(self, 'morse_farnsworth_wpm', None)
         
-        # Calculate timing based on WPM settings
+        # Calculate timing based on WPM
         timing = self.calculate_timing(current_wpm, current_farnsworth)
         
         timing_info = f"WPM: {current_wpm}"
         if current_farnsworth:
             timing_info += f", Farnsworth: {current_farnsworth}"
         
-        logger.info(f"Transmitting callsign {self.config.CALLSIGN} in CW ({timing_info})")
+        logger.info(f"Transmitting text {text} in CW ({timing_info})")
         
         frequency = self.config.TONE_FREQ
         volume = self.config.TONE_VOLUME
         rate = self.config.RATE
         
-        # Build complete audio signal
         audio_data = []
         
-        for i, char in enumerate(self.config.CALLSIGN):
+        for i, char in enumerate(text):
             if char.isalnum():
                 morse_pattern = self.config.MORSE_DICT.get(char.upper(), '')
                 
@@ -365,8 +509,8 @@ class HamRepeater:
                         audio_data.extend(np.zeros(gap_samples))
                 
                 # Add inter-character gap
-                if i < len(self.config.CALLSIGN) - 1:
-                    next_char = self.config.CALLSIGN[i + 1] if i + 1 < len(self.config.CALLSIGN) else ''
+                if i < len(text) - 1:
+                    next_char = text[i + 1] if i + 1 < len(text) else ''
                     if next_char.isalnum():
                         gap_samples = int(rate * timing['inter_character_gap'])
                         audio_data.extend(np.zeros(gap_samples))
@@ -401,34 +545,6 @@ class HamRepeater:
                 
             except Exception as e:
                 logger.error(f"Error playing morse code: {e}")
-
-    def play_text_morse(self, text, wpm=None, farnsworth_wpm=None):
-        """Play any text in morse code"""
-        # Use provided WPM or fall back to instance settings or default
-        current_wpm = wpm or getattr(self, 'morse_wpm', 20)
-        current_farnsworth = farnsworth_wpm or getattr(self, 'morse_farnsworth_wpm', None)
-        
-        # Calculate timing based on WPM settings
-        timing = self.calculate_timing(current_wpm, current_farnsworth)
-        
-        timing_info = f"WPM: {current_wpm}"
-        if current_farnsworth:
-            timing_info += f", Farnsworth: {current_farnsworth}"
-        
-        logger.info(f"Transmitting '{text}' in CW ({timing_info})")
-        
-        for i, char in enumerate(text):
-            if char.isalnum():
-                self.morse_code_tone(char, timing)
-                
-                # Add inter-character gap (except after last character)
-                if i < len(text) - 1:
-                    next_char = text[i + 1] if i + 1 < len(text) else ''
-                    if next_char.isalnum():
-                        time.sleep(timing['inter_character_gap'])
-            elif char == ' ':
-                # Handle word spacing
-                time.sleep(timing['inter_word_gap'])
     
     def play_looping_audio(self, filename, stop_event):
         """Play audio file in a loop until stop event is set"""
@@ -466,10 +582,10 @@ class HamRepeater:
         """Split text into sentences for better TTS flow"""
         import re
         
-        # Greek and English sentence endings
-        sentence_endings = r'[.!?;]'
+        # Sentence endings
+        sentence_endings = r'[.!?;,]'
         
-        # Split on sentence endings but keep the punctuation
+        # Split on sentence endings
         sentences = re.split(f'({sentence_endings})', text)
         
         # Recombine punctuation with sentences
@@ -501,13 +617,13 @@ class HamRepeater:
         return result if result else [text]
 
     def speak_with_piper(self, text):
-        """Convert text to speech using Piper"""
+        """TTS using Piper"""
         if not self.piper_voice:
             logger.error("Piper voice not loaded")
             return False
         
         try:
-            # Split text into sentences for better flow
+            # Split text into sentences
             sentences = self._split_sentences(text)
             logger.info(f"Speaking {len(sentences)} sentence(s)")
             
@@ -521,12 +637,12 @@ class HamRepeater:
                 with wave.open(temp_file, "wb") as wav_file:
                     self.piper_voice.synthesize_wav(sentence, wav_file)
                 
-                # Play the generated audio file
+                # Play audio file
                 self.play_audio(temp_file)
                 
                 # Small pause between sentences (except for the last one)
                 if i < len(sentences) - 1:
-                    time.sleep(0.3)  # 300ms pause between sentences
+                    time.sleep(0.3)  # 300ms
                 
                 # Clean up temp file
                 if os.path.exists(temp_file):
@@ -539,9 +655,9 @@ class HamRepeater:
             return False
     
     def run_ai_mode(self):
-        """Run AI mode subprocess with proper monitoring"""
+        """Run AI mode subprocess"""
         self.ai_mode_running = True
-        timeout_played = [False]  # Use list to make it mutable in nested function
+        timeout_played = [False]
         ai_ready = [False]
         
         logger.info("Starting AI mode")
@@ -556,7 +672,7 @@ class HamRepeater:
         )
         loading_thread.start()
         
-        # Start AI subprocess
+        # Start subprocess
         try:
             process = subprocess.Popen(["python", "aimode.py"])
         except Exception as e:
@@ -577,7 +693,7 @@ class HamRepeater:
                     return
                 time.sleep(0.1)
             
-            # Process exited before ready signal - early exit
+            # Process exited early
             loading_stop_event.set()
             loading_thread.join()
             self.play_audio(self.config.TIMEOUT_FILE)
@@ -589,13 +705,13 @@ class HamRepeater:
         
         # Wait for AI process to complete
         process.wait()
-        monitor_thread.join(timeout=1.0)  # Give monitor thread time to finish
+        monitor_thread.join(timeout=1.0)
         
         # Cleanup
         self.cleanup_files()
         
-        # Only play timeout if AI became ready but then exited normally
-        # Don't play if it was an early exit (already played) or if still loading
+        # Only play timeout if exited normally
+        # Don't play if it was an early exit
         if ai_ready[0] and not timeout_played[0]:
             time.sleep(0.6)
             self.play_audio(self.config.TIMEOUT_FILE)
@@ -604,22 +720,23 @@ class HamRepeater:
         logger.info("AI mode completed")
         
     def load_radioid_data(self):
+        """Load RadioID database"""
         import csv
         import requests
         import sqlite3
         
-        # Create/update SQLite database instead of loading everything into memory
-        db_file = "data/databases/callsigns.db"
+        # Create/update SQLite database
+        db_file = self.config.CALLSIGN_DB_FILE
         
         try:
-            # Download fresh data if needed
+            # Download fresh data
             response = requests.get(self.config.RADIOID_CSV_URL, timeout=10)
             if response.status_code == 200:
                 with open(self.config.RADIOID_LOCAL_FILE, "w", encoding="utf-8") as f:
                     f.write(response.text)
                 logger.info("Downloaded fresh user.csv from RadioID")
                 
-                # Convert CSV to SQLite for faster lookups
+                # Convert CSV to SQLite
                 conn = sqlite3.connect(db_file)
                 conn.execute('''CREATE TABLE IF NOT EXISTS callsigns 
                                (callsign TEXT PRIMARY KEY, first_name TEXT, last_name TEXT, 
@@ -643,14 +760,14 @@ class HamRepeater:
         except Exception as e:
             logger.warning(f"Could not download/process RadioID CSV: {e}")
         
-        return db_file  # Return database filename instead of records dict
+        return db_file  # Return database filename
         
     def lookup_callsign_in_db(self, callsign):
-        """Look up callsign in SQLite database"""
+        """Look up callsign in RadioID database"""
         import sqlite3
         
         try:
-            conn = sqlite3.connect(self.callsign_data)  # self.callsign_data now contains DB filename
+            conn = sqlite3.connect(self.callsign_data)
             cursor = conn.execute('SELECT * FROM callsigns WHERE callsign = ?', (callsign.upper(),))
             result = cursor.fetchone()
             conn.close()
@@ -740,15 +857,16 @@ class HamRepeater:
                 time.sleep(1)  # Brief pause before retrying
     
     def callsign_thread(self):
-        """Periodic callsign identification thread"""
+        """Periodic callsign CW ID"""
         while True:
             time.sleep(self.config.CW_ID_INTERVAL)
             # Wait if currently talking
             while self.talking:
                 time.sleep(1)
-            self.play_callsign_morse()
+            self.play_text_morse(self.config.CALLSIGN)
             
     def fetch_tles(self):
+        """Fetch TLE data for satellite passses"""
         combined = ""
         try:
             import requests
@@ -768,6 +886,7 @@ class HamRepeater:
             raise RuntimeError("No valid TLE data available.")
                 
     def record_callsign_audio(self, duration=10, filename="audio/temp/callsign.wav"):
+        """Record audio clip for callsign search"""
         try:
             stream = self.p.open(
                 format=self.config.FORMAT,
@@ -800,9 +919,10 @@ class HamRepeater:
             return None
             
     def transcribe_audio_whisper(self, filename):
+        """Speech To Text conversion with FasterWhisper"""
         try:
             from faster_whisper import WhisperModel
-            model = WhisperModel("small", compute_type="int8")  # You can change model size
+            model = WhisperModel("small", compute_type="int8")  # Model size
             segments, _ = model.transcribe(filename, language="en")
             result = "".join([seg.text for seg in segments]).strip().upper()
             logger.info(f"Transcribed callsign input: {result}")
@@ -812,10 +932,10 @@ class HamRepeater:
             return ""
             
     def extract_callsign_from_text(self, text):
-        words = text.strip().lower().split()
+        """Callsign identification from text"""
+        words = re.sub(r'[^\w\s]', ' ', text).lower().split()
         callsign = ""
         
-        # More aggressive callsign extraction
         for word in words:
             # Direct phonetic alphabet mapping
             if word in self.config.PHONETIC_MAP:
@@ -824,7 +944,7 @@ class HamRepeater:
                 callsign += self.config.GREEK_NUMBER_MAP[word]
             elif word in self.config.ENGLISH_NUMBER_MAP:
                 callsign += self.config.ENGLISH_NUMBER_MAP[word]
-            elif word.isdigit():
+            elif word[0].isdigit():
                 callsign += word
             elif len(word) == 1 and word.isalpha():
                 callsign += word.upper()
@@ -835,15 +955,15 @@ class HamRepeater:
                         callsign += letter
                         break
                 else:
-                    # Last resort: take first letter if it looks like speech
+                    # Fallback: take first letter if it looks like speech
                     if word.isalpha() and len(word) > 1:
                         callsign += word[0].upper()
         
         # Clean up common patterns and validate
         callsign = callsign.replace(" ", "").upper()
         
-        # Basic callsign validation - should have letters and possibly numbers
-        if len(callsign) >= 3 and any(c.isalpha() for c in callsign):
+        # Basic callsign validation, should have 4 alphanumeric characters
+        if len(callsign) >= 4 and any(c.isalpha() for c in callsign):
             logger.info(f"Extracted callsign from text '{text}': {callsign}")
             return callsign
         else:
@@ -858,11 +978,17 @@ class HamRepeater:
         was_talking = False
         
         # Start background threads
-        dtmf_thread = threading.Thread(target=self.dtmf_listener, daemon=True)
-        callsign_thread = threading.Thread(target=self.callsign_thread, daemon=True)
+        dtmf_thread = None
+        if self.config.ENABLE_DTMF:
+            dtmf_thread = threading.Thread(target=self.dtmf_listener, daemon=True)
+            dtmf_thread.start()
+
+        callsign_thread = None
+        if self.config.ENABLE_CW_ID:
+            callsign_thread = threading.Thread(target=self.callsign_thread, daemon=True)
+            callsign_thread.start()
         
-        dtmf_thread.start()
-        callsign_thread.start()
+        logger.info("Ham repeater running...")
         
         try:
             while True:
@@ -879,7 +1005,8 @@ class HamRepeater:
                 
                 # Check if audio is above threshold (someone talking)
                 if np.max(np.abs(audio_np)) > self.config.THRESHOLD:
-                    self.output_stream.write(boosted_data)
+                    if self.config.ENABLE_AUDIO_REPEAT:
+                        self.output_stream.write(boosted_data)
                     silent_time = 0
                     was_talking = True
                     self.talking = True
@@ -891,8 +1018,10 @@ class HamRepeater:
                         silent_time = time.time() - start_silent
                         
                         if silent_time >= self.config.SILENCE_TIME:
-                            # Only play roger beep if AI mode is not about to start
-                            if not (self.play_ai_mode and not self.ai_mode_running):
+                            """Feature/Module logic"""
+                            # Only run modules if there is silence
+                            # Only play roger beep if enabled and AI mode is not about to start
+                            if self.config.ENABLE_ROGER_BEEP and not (self.play_ai_mode and not self.ai_mode_running):
                                 self.play_tone()  # Roger beep
                             
                             # Menu playback
@@ -921,24 +1050,10 @@ class HamRepeater:
                                 finally:
                                     self.play_meme = False
                             
-                            def set_greek_voice(engine):
-                                voices = engine.getProperty('voices')
-                                for voice in voices:
-                                    langs = []
-                                    try:
-                                        langs = [lang.decode('utf-8') for lang in voice.languages if isinstance(lang, bytes)]
-                                    except Exception:
-                                        pass
-                                    if any('el' in lang.lower() for lang in langs) or 'el' in voice.id.lower():
-                                        engine.setProperty('voice', voice.id)
-                                        logger.info(f"Greek voice selected: {voice.name}")
-                                        return
-                                logger.warning("No Greek voice found — using default voice.")
-                            
                             # Fun Fact playback
                             if self.play_fact:
                                 try:
-                                    fact_file = "data/databases/fun_facts.txt"
+                                    fact_file = self.config.FUN_FACTS_FILE
                                     if os.path.exists(fact_file):
                                         with open(fact_file, "r", encoding="utf-8") as f:
                                             facts = [line.strip() for line in f if line.strip()]
@@ -959,22 +1074,6 @@ class HamRepeater:
                             if self.play_time:
                                 try:
                                     from datetime import datetime
-
-                                    GREEK_HOUR_NAMES = {
-                                        1: "μία",
-                                        2: "δύο",
-                                        3: "τρεις",
-                                        4: "τέσσερις",
-                                        5: "πέντε",
-                                        6: "έξι",
-                                        7: "επτά",
-                                        8: "οκτώ",
-                                        9: "εννέα",
-                                        10: "δέκα",
-                                        11: "έντεκα",
-                                        12: "δώδεκα",
-                                        0: "δώδεκα"
-                                    }
 
                                     GREEK_MONTHS = {
                                         "January": "Ιανουαρίου",
@@ -999,7 +1098,7 @@ class HamRepeater:
                                     month_gr = GREEK_MONTHS.get(month_en, month_en)
                                     year = now.year
 
-                                    hour_word = GREEK_HOUR_NAMES.get(hour, str(hour))
+                                    hour_word = self.config.GREEK_HOUR_NAMES.get(hour, str(hour))
                                     minute_word = f"{minute}" if minute != 0 else "ακριβώς"
 
                                     if minute != 0:
@@ -1007,7 +1106,7 @@ class HamRepeater:
                                     else:
                                         time_phrase = f"{hour_word} ακριβώς"
 
-                                    date_phrase = f"Σήμερα είναι {day} του {month_gr} του {year}."
+                                    date_phrase = f"Σήμερα είναι {day} {month_gr} του {year}."
                                     full_phrase = f"Η ώρα είναι {time_phrase}. {date_phrase}"
 
                                     logger.info(f"Speaking time and date: {full_phrase}")
@@ -1025,7 +1124,7 @@ class HamRepeater:
                                     import requests, json
                                     from datetime import datetime
 
-                                    city = "Serres,GR"
+                                    city = self.config.WEATHER_CITY
                                     api_key = self.config.OPENWEATHER_API_KEY
                                     url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric&lang=el"
 
@@ -1049,13 +1148,23 @@ class HamRepeater:
                                             temp = round(data["main"]["temp"])
                                             description = data["weather"][0]["description"]
                                             humidity = data["main"]["humidity"]
-                                            windspeed = round(data["wind"]["speed"])
+                                            windspeed = data["wind"]["speed"]
+                                            
+                                            # Convert m/s to beaufort
+                                            BEAUFORT_LIMITS = [0.5, 1.5, 3.3, 5.5, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6]
+                                            
+                                            beaufort = 0
+                                            for limit in BEAUFORT_LIMITS:
+                                                if windspeed <= limit:
+                                                    break
+                                                beaufort += 1  
 
+                                            # Construct forecast message
                                             forecast = (
-                                                f"Ο καιρός στις Σέρρες είναι {description}, "
+                                                f"Ο καιρός στην περιοχή {city} είναι {description}, "
                                                 f"με θερμοκρασία {temp} βαθμούς Κελσίου, "
                                                 f"υγρασία {humidity} τοις εκατό,"
-                                                f"και ανέμους {windspeed} μέτρα το δευτερόλεπτο."
+                                                f"και ανέμους {beaufort} μποφόρ."
                                             )
 
                                             # Save to cache
@@ -1106,10 +1215,17 @@ class HamRepeater:
                                             "17m-15m": "17 και 15 μέτρα",
                                             "12m-10m": "12 και 10 μέτρα"
                                         }
+                                        
+                                        greek_condition_names = {
+                                            "Good": "καλές",
+                                            "Fair": "μέτριες",
+                                            "Poor": "κακές",
+                                        }
 
                                         for key, condition in band_reports.items():
                                             greek_band = greek_band_names.get(key, key)
-                                            band_phrases.append(f"{greek_band}: {condition}")
+                                            greek_condition = greek_condition_names.get(condition, condition)
+                                            band_phrases.append(f"{greek_band}: {greek_condition}")
 
                                         band_phrase = ", ".join(band_phrases)
                                         full_report = (
@@ -1137,11 +1253,13 @@ class HamRepeater:
                                     from datetime import datetime, timedelta
                                     import pytz
                                     from pytz import timezone
-                                    from skyfield.api import EarthSatellite, Topos, load, utc
+                                    from skyfield.api import EarthSatellite, Topos, load, Loader, utc
 
-                                    # Observer: Serres
-                                    observer = Topos(latitude_degrees=41.08, longitude_degrees=23.55, elevation_m=50)
-                                    local_tz = pytz.timezone("Europe/Athens")
+                                    # Observer position
+                                    observer = Topos(latitude_degrees=self.config.LATITUDE, 
+                                                     longitude_degrees=self.config.LONGITUDE, 
+                                                     elevation_m=self.config.ELEVATION)
+                                    local_tz = pytz.timezone(self.config.TIMEZONE)
                                     ts = load.timescale()
                                     now = ts.now()
                                     t_end = ts.utc((datetime.utcnow() + timedelta(hours=24)).replace(tzinfo=utc))
@@ -1150,10 +1268,10 @@ class HamRepeater:
                                     tle_text = self.fetch_tles()
                                     lines = tle_text.strip().splitlines()
 
-                                    # Parse TLEs into Skyfield satellites - FIXED VERSION
+                                    # Parse TLEs into Skyfield satellites
                                     satellites = []
                                     
-                                    # More precise name matching
+                                    # Name matching
                                     def name_matches(tle_name, target_names):
                                         tle_name_upper = tle_name.upper()
                                         for target in target_names:
@@ -1215,8 +1333,10 @@ class HamRepeater:
 
                                     print(f"Total satellites loaded: {len(satellites)}")  # Debug print
 
-                                    # Find upcoming AOS events for each satellite
+                                    load = Loader("data/cache") # Initialize custom path
                                     eph = load("de421.bsp")  # Required by skyfield
+                                    
+                                    # Find upcoming AOS events for each satellite
                                     passes = []
                                     
                                     for sat in satellites:
@@ -1241,16 +1361,11 @@ class HamRepeater:
                                         # Sort and limit
                                         passes.sort(key=lambda x: x[1])
                                         spoken_parts = []
-                                        greek_hours = {
-                                            1: "μία", 2: "δύο", 3: "τρεις", 4: "τέσσερις", 5: "πέντε",
-                                            6: "έξι", 7: "επτά", 8: "οκτώ", 9: "εννέα", 10: "δέκα",
-                                            11: "έντεκα", 12: "δώδεκα", 0: "δώδεκα"
-                                        }
 
                                         for name, dt in passes[:3]:
                                             hour = dt.hour % 12
                                             minute = dt.minute
-                                            hour_str = greek_hours.get(hour, str(hour))
+                                            hour_str = self.config.GREEK_HOUR_NAMES.get(hour, str(hour))
                                             minute_str = f"{minute:02d}"
                                             spoken_parts.append(f"{name}: {hour_str} και {minute_str}")
 
@@ -1267,7 +1382,7 @@ class HamRepeater:
                             # Callsign lookup
                             if self.lookup_callsign:
                                 try:
-                                    self.play_audio("audio/system/callsign_prompt.wav")
+                                    self.play_audio(self.config.CALLSIGN_PROMPT_FILE)
                                     audio_file = self.record_callsign_audio(duration=8)  # Shorter duration
                                     if not audio_file:
                                         raise Exception("Audio recording failed")
@@ -1339,8 +1454,81 @@ class HamRepeater:
 
 def main():
     """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description='ChatRF: AI-Enhanced Ham Radio Repeater',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        '--no-audio-repeat',
+        action='store_true',
+        help='Disable audio repeating (monitor mode only)'
+    )
+    
+    parser.add_argument(
+        '--no-roger',
+        action='store_true',
+        help='Disable roger beep at end of transmission'
+    )
+    
+    parser.add_argument(
+        '--no-cw-id',
+        action='store_true',
+        help='Disable periodic CW callsign identification'
+    )
+    
+    parser.add_argument(
+        '--no-dtmf',
+        action='store_true',
+        help='Disable DTMF command listening'
+    )
+    
+    parser.add_argument(
+        '--no-ptt',
+        action='store_true',
+        help='Disable PTT control via Raspberry Pi GPIO (REQUIRED on Windows)'
+    )
+    
+    parser.add_argument(
+        '--audio-boost',
+        type=float,
+        default=5.0,
+        help='Audio boost factor (default: 5.0)'
+    )
+    
+    parser.add_argument(
+        '--threshold',
+        type=int,
+        default=500,
+        help='Audio detection threshold (default: 500)'
+    )
+    
+    args = parser.parse_args()
+    
     ensure_directories()
-    repeater = HamRepeater()
+    repeater = HamRepeater(args)
+    
+    # Apply additional args
+    if args.audio_boost:
+        repeater.config.AUDIO_BOOST = args.audio_boost
+    if args.threshold:
+        repeater.config.THRESHOLD = args.threshold
+    
+    # Log configuration
+    logger.info("Starting repeater with configuration:")
+    logger.info(f"  Audio Repeat: {repeater.config.ENABLE_AUDIO_REPEAT}")
+    logger.info(f"  Roger Beep: {repeater.config.ENABLE_ROGER_BEEP}")
+    logger.info(f"  CW ID: {repeater.config.ENABLE_CW_ID}")
+    logger.info(f"  DTMF Commands: {repeater.config.ENABLE_DTMF}")
+    logger.info(f"  PTT Control: {repeater.config.ENABLE_PTT}")
+    logger.info(f"  Audio Boost: {repeater.config.AUDIO_BOOST}")
+    logger.info(f"  Threshold: {repeater.config.THRESHOLD}")
+    
+    # PTT via Raspberry Pi GPIO
+    if repeater.config.ENABLE_PTT:
+        from ptt_audio_monitor import ptt_for_repeater
+        repeater = ptt_for_repeater(repeater, ptt_pin=18)
+    
     try:
         repeater.run_repeater()
     except Exception as e:
@@ -1349,4 +1537,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
