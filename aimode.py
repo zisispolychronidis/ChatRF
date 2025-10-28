@@ -8,6 +8,8 @@ import subprocess
 import logging
 import threading
 import json
+import configparser
+from pathlib import Path
 from datetime import datetime, timedelta
 from faster_whisper import WhisperModel
 from contextlib import contextmanager
@@ -19,36 +21,100 @@ logger = logging.getLogger(__name__)
 
 class AIConfig:
     """Configuration class for AI mode settings"""
-    # Audio Settings
-    FORMAT = pyaudio.paInt16
-    CHANNELS = 1
-    RATE = 44100
-    CHUNK = 1024
-    THRESHOLD = 500
+    def __init__(self, config_file='config/settings/aimode_config.ini'):
+        self.config = configparser.ConfigParser()
+        
+        # Check if config file exists
+        if not os.path.exists(config_file):
+            logger.warning(f"Config file {config_file} not found! Creating default config...")
+            self._create_default_config(config_file)
+        
+        self.config.read(config_file)
+        
+        # Audio Settings
+        self.FORMAT = pyaudio.paInt16  # This stays hardcoded
+        self.CHANNELS = self.config.getint('Audio', 'channels', fallback=1)
+        self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
+        self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
+        self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
+        
+        # File paths
+        self.OUTPUT_FILE = self.config.get('Paths', 'output_file', fallback='audio/temp/recorded_audio.wav')
+        self.CANCEL_FILE = self.config.get('Paths', 'cancel_file', fallback='flags/cancel_ai.flag')
+        self.READY_FILE = self.config.get('Paths', 'ready_file', fallback='flags/ai_ready.flag')
+        self.CONTEXT_FILE = self.config.get('Paths', 'context_file', fallback='data/context/conversation_context.json')
+        self.SYSTEM_PROMPT_FILE = self.config.get('Paths', 'system_prompt_file', fallback='config/prompts/system_prompt.txt')
+        
+        # AI Model Settings
+        self.WHISPER_MODEL_SIZE = self.config.get('AI', 'whisper_model_size', fallback='small')
+        self.OLLAMA_MODEL_NAME = self.config.get('AI', 'ollama_model', fallback='gemma3')
+        self.TEMPERATURE = self.config.getfloat('AI', 'temperature', fallback=0.2)
+        
+        # Timing Settings
+        self.DEFAULT_TIMEOUT = self.config.getint('Timing', 'default_timeout', fallback=60)
+        self.SILENCE_LIMIT_SECONDS = self.config.getint('Timing', 'silence_limit_seconds', fallback=2)
+        
+        # Context Settings
+        self.MAX_CONTEXT_MESSAGES = self.config.getint('Context', 'max_context_messages', fallback=20)
+        self.CONTEXT_TIMEOUT_MINUTES = self.config.getint('Context', 'context_timeout_minutes', fallback=30)
+        
+        # Piper TTS Settings
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
+        self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_ai_temp.wav')
+        
+        # Thinking Sound Settings
+        self.THINKING_SOUND_ENABLED = self.config.getboolean('ThinkingSound', 'enabled', fallback=True)
+        self.THINKING_SOUND_VOLUME = self.config.getfloat('ThinkingSound', 'volume', fallback=0.6)
     
-    # File paths
-    OUTPUT_FILE = "audio/temp/recorded_audio.wav"
-    CANCEL_FILE = "flags/cancel_ai.flag"
-    READY_FILE = "flags/ai_ready.flag"
-    CONTEXT_FILE = "data/context/conversation_context.json"
-    SYSTEM_PROMPT_FILE = "config/prompts/system_prompt.txt"
-    
-    # AI Model Settings
-    WHISPER_MODEL_SIZE = "small"
-    OLLAMA_MODEL_NAME = "gemma3"
-    TEMPERATURE = 0.2
-    
-    # Timing Settings
-    DEFAULT_TIMEOUT = 60  # seconds
-    SILENCE_LIMIT_SECONDS = 2
-    
-    # Context Settings
-    MAX_CONTEXT_MESSAGES = 20  # Maximum number of messages to keep in context
-    CONTEXT_TIMEOUT_MINUTES = 30  # Clear context after this many minutes of inactivity
-    
-    # Piper TTS Settings
-    PIPER_MODEL_PATH = "models/el_GR-rapunzelina-low.onnx"
-    PIPER_TEMP_AUDIO = "audio/temp/piper_ai_temp.wav"
+    def _create_default_config(self, config_file):
+        """Create a default aimode_config.ini file"""
+        default_config = configparser.ConfigParser()
+        
+        default_config['Audio'] = {
+            'channels': '1',
+            'rate': '44100',
+            'chunk': '1024',
+            'threshold': '500'
+        }
+        
+        default_config['Paths'] = {
+            'output_file': 'audio/temp/recorded_audio.wav',
+            'cancel_file': 'flags/cancel_ai.flag',
+            'ready_file': 'flags/ai_ready.flag',
+            'context_file': 'data/context/conversation_context.json',
+            'system_prompt_file': 'config/prompts/system_prompt.txt'
+        }
+        
+        default_config['AI'] = {
+            'whisper_model_size': 'small',
+            'ollama_model': 'gemma3',
+            'temperature': '0.2'
+        }
+        
+        default_config['Timing'] = {
+            'default_timeout': '60',
+            'silence_limit_seconds': '2'
+        }
+        
+        default_config['Context'] = {
+            'max_context_messages': '20',
+            'context_timeout_minutes': '30'
+        }
+        
+        default_config['Piper'] = {
+            'model_path': 'models/el_GR-rapunzelina-low.onnx',
+            'temp_audio': 'audio/temp/piper_ai_temp.wav'
+        }
+        
+        default_config['ThinkingSound'] = {
+            'enabled': 'true',
+            'volume': '0.6'
+        }
+        
+        with open(config_file, 'w') as f:
+            default_config.write(f)
+        
+        logger.info(f"Created default config file: {config_file}")
     
     def load_system_prompt(self):
         """Load system prompt from file"""
@@ -178,16 +244,18 @@ class ConversationContext:
         return f"Context: {user_messages} user messages, {ai_messages} AI responses, last activity {minutes_ago} minutes ago"
 
 class TypingSound:
-    """Class to handle typing sound generation during processing"""
-    
+    """Class to handle typing sound generation during processing"""    
     def __init__(self, config):
         self.config = config
         self.stop_typing = threading.Event()
         self.typing_thread = None
         self.pyaudio_instance = None
     
-    def _generate_tone(self, frequency, duration, sample_rate=44100, volume=0.08):
+    def _generate_tone(self, frequency, duration, sample_rate=44100, volume=None):
         """Generate a single tone with smooth fade in/out"""
+        if volume is None:
+            volume = self.config.THINKING_SOUND_VOLUME * 0.15  # Scale down for individual tones
+        
         frames = int(duration * sample_rate)
         arr = np.sin(2 * np.pi * frequency * np.linspace(0, duration, frames))
         
@@ -200,42 +268,37 @@ class TypingSound:
         return (arr * volume * 32767).astype(np.int16)
     
     def _generate_melody(self, sample_rate=44100):
-        """Generate a pleasant thinking melody"""
-        # Define a gentle, thoughtful melody in C major
-        # Notes: C5, E5, G5, C6, G5, E5, C5, G4
-        # Frequencies in Hz
+        """Generate a thinking melody"""
+        # A gentle, thoughtful arpeggio pattern in A minor
         melody_notes = [
+            440.00,  # A4
             523.25,  # C5
             659.25,  # E5
-            783.99,  # G5
-            1046.50, # C6
-            783.99,  # G5
-            659.25,  # E5
             523.25,  # C5
-            392.00   # G4
+            440.00,  # A4
+            329.63,  # E4
+            440.00,  # A4
+            523.25,  # C5
         ]
         
-        # Note durations (in seconds)
-        note_duration = 0.25
-        
-        # Generate the complete melody
+        note_duration = 0.18  # Slightly faster, more fluid
         melody_audio = np.array([], dtype=np.int16)
         
         for i, freq in enumerate(melody_notes):
-            # Slightly vary volume for musical expression
-            volume = 0.6 + (0.2 * np.sin(i * 0.5))  # Gentle volume variation
+            # Gentle volume swell
+            volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
             
-            note = self._generate_tone(freq, note_duration, sample_rate, volume)
+            note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
             melody_audio = np.concatenate([melody_audio, note])
             
-            # Add small gap between notes (except last one)
+            # Very short gap for smooth flow
             if i < len(melody_notes) - 1:
-                gap_frames = int(0.05 * sample_rate)  # 50ms gap
+                gap_frames = int(0.03 * sample_rate)
                 gap = np.zeros(gap_frames, dtype=np.int16)
                 melody_audio = np.concatenate([melody_audio, gap])
         
-        # Add a longer pause at the end before looping
-        end_pause_frames = int(0.8 * sample_rate)  # 800ms pause
+        # Pause before loop
+        end_pause_frames = int(0.6 * sample_rate)
         end_pause = np.zeros(end_pause_frames, dtype=np.int16)
         melody_audio = np.concatenate([melody_audio, end_pause])
         
@@ -290,6 +353,11 @@ class TypingSound:
     
     def start(self):
         """Start the typing sound loop"""
+        # Check if thinking sound is enabled
+        if not self.config.THINKING_SOUND_ENABLED:
+            logger.debug("Thinking sound is disabled in config")
+            return
+        
         if self.typing_thread and self.typing_thread.is_alive():
             return
         
@@ -749,7 +817,7 @@ class HamRadioAI:
     
     def run(self):
         """Main AI mode loop"""
-        logger.info("Starting Ham Radio AI mode with conversation context")
+        logger.info("Starting Ham Radio AI mode...")
         
         try:
             while True:
@@ -790,13 +858,59 @@ class HamRadioAI:
 
 def main():
     """Main entry point"""
-    ai = HamRadioAI()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Ham Radio AI Mode',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        '--config',
+        default='aimode_config.ini',
+        help='Path to configuration file (default: aimode_config.ini)'
+    )
+    
+    parser.add_argument(
+        '--no-thinking-sound',
+        action='store_true',
+        help='Disable thinking sound during processing'
+    )
+    
+    parser.add_argument(
+        '--model',
+        help='Override Ollama model from config'
+    )
+    
+    parser.add_argument(
+        '--temperature',
+        type=float,
+        help='Override AI temperature from config'
+    )
+    
+    args = parser.parse_args()
+    
     try:
+        ai = HamRadioAI()
+        
+        # Apply command-line overrides
+        if args.no_thinking_sound:
+            ai.config.THINKING_SOUND_ENABLED = False
+        
+        if args.model:
+            ai.config.OLLAMA_MODEL_NAME = args.model
+            logger.info(f"Using model: {args.model}")
+        
+        if args.temperature is not None:
+            ai.config.TEMPERATURE = args.temperature
+            logger.info(f"Using temperature: {args.temperature}")
+        
         ai.run()
+        
     except Exception as e:
         logger.error(f"Fatal error in AI mode: {e}")
-        ai.shutdown()
+        if 'ai' in locals():
+            ai.shutdown()
 
 if __name__ == "__main__":
     main()
-
