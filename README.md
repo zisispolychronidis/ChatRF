@@ -7,18 +7,14 @@
 **ChatRF** is a modular Python-based ham radio repeater system enhanced with an embedded conversational AI assistant.
 Designed for amateur radio enthusiasts, this project integrates real-time AI interaction, audio signal processing, DTMF command handling, weather updates, satellite tracking, callsign lookups, and more, all through standard RF equipment and a local computer (e.g., Raspberry Pi).
 
-The current version is very early but includes all features mentioned below.
-
 ### 📚 Table of Contents
 
 - [What is ChatRF?](#-what-is-chatrf)
 - [Core Features](#-core-features)
   - [Repeater System](#-repeater-system)
   - [AI Assistant ("AI Mode")](#-ai-assistant-ai-mode)
-  - [Modules](#-modules)
 - [DTMF Command Menu](#-dtmf-command-menu)
 - [Installation & Setup](#-installation--setup)
-- [License](#-license)
 - [Contributions](#-contributions)
 - [Developed by](#-developed-by-sv2tmt--zisis-polychronidis)
 
@@ -108,7 +104,7 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 
 ## 📦 Installation & Setup
 
-All setup instructions, development guidance, wiring diagrams, and deployment guidance are going to be provided in the project's **GitHub Wiki**.
+All setup instructions, development guidance, wiring diagrams, and deployment guidance are going to be provided in the project's **[GitHub Wiki](https://github.com/zisispolychronidis/ChatRF/wiki)**.
 
 ---
 
