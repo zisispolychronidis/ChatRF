@@ -1,0 +1,12 @@
+pyaudio
+numpy
+wave
+ollama
+faster-whisper
+piper-tts
+pydub
+requests
+configparser
+logging
+argparse
+jsonschema
