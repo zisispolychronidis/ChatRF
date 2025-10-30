@@ -116,7 +116,7 @@ Also, if you end up using this for your own ham radio station, I'd love to see i
 
 ---
 
-### 📡 Developed by SV2TMT — Zisis Polychronidis
+### 📡 Developed by SV2TMT, Zisis Polychronidis
 
 This is part of an ongoing exploration of merging cutting-edge AI with classic ham radio principles.  
 **Made by young hams, for the future of amateur radio.**
