@@ -11,4 +11,5 @@ argparse
 jsonschema
 skyfield
 pytz
+scipy
 
