@@ -7,8 +7,8 @@ piper-tts
 pydub
 requests
 configparser
-logging
 argparse
 jsonschema
 skyfield
 pytz
+
