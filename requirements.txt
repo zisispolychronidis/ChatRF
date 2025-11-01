@@ -1,6 +1,5 @@
 pyaudio
 numpy
-wave
 ollama
 faster-whisper
 piper-tts
@@ -12,4 +11,3 @@ jsonschema
 skyfield
 pytz
 scipy
-
