@@ -1492,15 +1492,13 @@ def main():
     parser.add_argument(
         '--audio-boost',
         type=float,
-        default=5.0,
-        help='Audio boost factor (default: 5.0)'
+        help='Audio boost factor'
     )
     
     parser.add_argument(
         '--threshold',
         type=int,
-        default=500,
-        help='Audio detection threshold (default: 500)'
+        help='Audio detection threshold'
     )
     
     args = parser.parse_args()
@@ -1537,3 +1535,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
