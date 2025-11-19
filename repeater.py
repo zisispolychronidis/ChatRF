@@ -10,6 +10,7 @@ import random
 import argparse
 import configparser
 import re
+import pydub
 from pathlib import Path
 from piper import PiperVoice
 from dtmf import detect_dtmf
@@ -322,25 +323,42 @@ class HamRepeater:
             raise
     
     def play_audio(self, filename):
-        """Play a WAV file through the audio output"""
+        """Play a WAV or MP3 file through the audio output"""
         try:
-            with wave.open(filename, 'rb') as wf:
-                audio_stream = self.p.open(
-                    format=self.p.get_format_from_width(wf.getsampwidth()),
-                    channels=wf.getnchannels(),
-                    rate=wf.getframerate(),
-                    output=True
-                )
+            # Determine file type from extension
+            file_ext = filename.lower().split('.')[-1]
+            
+            if file_ext == 'mp3':
+                # MP3 handling
+                from pydub import AudioSegment
+                from pydub.playback import play
                 
-                data = wf.readframes(self.config.CHUNK)
-                while data:
-                    audio_stream.write(data)
+                audio = AudioSegment.from_mp3(filename)
+                play(audio)
+                
+            elif file_ext == 'wav':
+                # WAV handling
+                with wave.open(filename, 'rb') as wf:
+                    audio_stream = self.p.open(
+                        format=self.p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True
+                    )
+                    
                     data = wf.readframes(self.config.CHUNK)
-                
-                audio_stream.close()
+                    while data:
+                        audio_stream.write(data)
+                        data = wf.readframes(self.config.CHUNK)
+                    
+                    audio_stream.close()
+            else:
+                logger.error(f"Unsupported audio format: {file_ext}")
                 
         except FileNotFoundError:
             logger.error(f"Audio file {filename} not found!")
+        except ImportError:
+            logger.error("pydub library not installed. Install with: pip install pydub")
         except Exception as e:
             logger.error(f"Error playing audio file {filename}: {e}")
     
@@ -719,48 +737,111 @@ class HamRepeater:
         self.ai_mode_running = False
         logger.info("AI mode completed")
         
-    def load_radioid_data(self):
+    def download_file(self, url, destination, chunk_size=8192):
+        """Download a file with a live progress bar."""
+        import requests
+        import sys
+
+        response = requests.get(url, stream=True, timeout=10)
+        response.raise_for_status()
+
+        total = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        bar_width = 40
+
+        with open(destination, "wb") as f:
+            for chunk in response.iter_content(chunk_size=chunk_size):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+
+                    if total > 0:
+                        percent = downloaded / total
+                        filled = int(bar_width * percent)
+                        bar = "█" * filled + "░" * (bar_width - filled)
+                        sys.stdout.write(f"\rDownloading File: [{bar}] {int(percent*100)}%")
+                        sys.stdout.flush()
+
+        sys.stdout.write("\rDownloading File: [" + "█"*bar_width + "] 100%\n")
+        sys.stdout.flush()
+        print("Download complete!")
+    
+    def load_radioid_data(self, force_update=False):
         """Load RadioID database"""
         import csv
         import requests
         import sqlite3
-        
-        # Create/update SQLite database
+
         db_file = self.config.CALLSIGN_DB_FILE
-        
+        csv_file = self.config.RADIOID_LOCAL_FILE
+        url = self.config.RADIOID_CSV_URL
+
+        # Determine whether a fresh CSV download is needed
+        download_needed = True
+        if os.path.exists(csv_file) and not force_update:
+            file_age = time.time() - os.path.getmtime(csv_file)
+            if file_age < 86400:  # 24 hours
+                logger.info("Using cached RadioID user.csv (less than 1 day old)")
+                download_needed = False
+            else:
+                logger.info("Cached RadioID user.csv is older than 1 day - redownloading...")
+        elif force_update:
+            logger.info("Force update enabled — downloading fresh RadioID user.csv")
+
         try:
-            # Download fresh data
-            response = requests.get(self.config.RADIOID_CSV_URL, timeout=10)
-            if response.status_code == 200:
-                with open(self.config.RADIOID_LOCAL_FILE, "w", encoding="utf-8") as f:
-                    f.write(response.text)
+            # Download CSV if needed
+            if download_needed or force_update:
+                logger.info("Downloading fresh user.csv from RadioID (This may take a while...)")
+                self.download_file(url, csv_file)
                 logger.info("Downloaded fresh user.csv from RadioID")
-                
-                # Convert CSV to SQLite
+
+            # Rebuild SQLite database if CSV is newer than DB or DB doesn't exist
+            rebuild_needed = (
+                not os.path.exists(db_file)
+                or force_update
+                or os.path.getmtime(csv_file) > os.path.getmtime(db_file)
+            )
+
+            if rebuild_needed:
+                logger.info("Updating SQLite callsign database from CSV...")
                 conn = sqlite3.connect(db_file)
-                conn.execute('''CREATE TABLE IF NOT EXISTS callsigns 
-                               (callsign TEXT PRIMARY KEY, first_name TEXT, last_name TEXT, 
-                                city TEXT, country TEXT)''')
-                
-                with open(self.config.RADIOID_LOCAL_FILE, "r", encoding="utf-8") as f:
+                conn.execute("PRAGMA journal_mode = OFF;")
+                conn.execute("PRAGMA synchronous = OFF;")
+
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS callsigns (
+                        callsign TEXT PRIMARY KEY,
+                        first_name TEXT,
+                        last_name TEXT,
+                        city TEXT,
+                        country TEXT
+                    )
+                ''')
+
+                with open(csv_file, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
-                    for row in reader:
-                        conn.execute('''INSERT OR REPLACE INTO callsigns 
-                                       VALUES (?, ?, ?, ?, ?)''',
-                                   (row["CALLSIGN"].strip().upper(),
-                                    row["FIRST_NAME"].strip(),
-                                    row["LAST_NAME"].strip(),
-                                    row["CITY"].strip(),
-                                    row["COUNTRY"].strip()))
-                
+                    data = [
+                        (
+                            row["CALLSIGN"].strip().upper(),
+                            row["FIRST_NAME"].strip(),
+                            row["LAST_NAME"].strip(),
+                            row["CITY"].strip(),
+                            row["COUNTRY"].strip()
+                        )
+                        for row in reader
+                    ]
+
+                conn.executemany('INSERT OR REPLACE INTO callsigns VALUES (?, ?, ?, ?, ?)', data)
                 conn.commit()
                 conn.close()
-                logger.info("Converted CSV to SQLite database")
-                
+                logger.info("SQLite callsign database updated.")
+            else:
+                logger.info("SQLite database is already up-to-date with the cached CSV.")
+
         except Exception as e:
             logger.warning(f"Could not download/process RadioID CSV: {e}")
-        
-        return db_file  # Return database filename
+
+        return db_file
         
     def lookup_callsign_in_db(self, callsign):
         """Look up callsign in RadioID database"""
@@ -1038,7 +1119,7 @@ class HamRepeater:
                             if self.play_meme:
                                 try:
                                     meme_folder = "audio/memes"
-                                    meme_files = [f for f in os.listdir(meme_folder) if f.lower().endswith(".wav")]
+                                    meme_files = [f for f in os.listdir(meme_folder) if f.lower().endswith(".wav") or f.lower().endswith(".mp3")]
                                     if meme_files:
                                         random_file = random.choice(meme_files)
                                         self.play_audio(os.path.join(meme_folder, random_file))
@@ -1535,4 +1616,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
