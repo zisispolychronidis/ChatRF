@@ -11,6 +11,7 @@ import argparse
 import configparser
 import re
 import pydub
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from piper import PiperVoice
 from dtmf import detect_dtmf
@@ -19,8 +20,54 @@ from pydub.playback import play
 from threading import Event
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+def setup_logging():
+    # Ensure logs directory exists
+    os.makedirs("logs", exist_ok=True)
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Get root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers.clear()
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # Create new file when size limit reached
+    file_handler = RotatingFileHandler(
+        'logs/repeater.log',
+        maxBytes=10*1024*1024,  # 10MB per file
+        backupCount=5,  # Keep 5 backup files
+        encoding='utf-8'
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Separate error log file
+    error_handler = RotatingFileHandler(
+        'logs/repeater_errors.log',
+        maxBytes=10*1024*1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+    logger.addHandler(error_handler)
+    
+    return logger
+
+logger = setup_logging()
 
 def ensure_directories():
     """Create necessary directories if they don't exist"""
@@ -1616,3 +1663,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
