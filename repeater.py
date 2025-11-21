@@ -912,77 +912,53 @@ class HamRepeater:
             logger.error(f"Database lookup error: {e}")
             return None
     
+    def command_schedule(self, attr, message):
+        if not getattr(self, attr):
+            setattr(self, attr, True)
+            logger.info(message)
+    
     def dtmf_listener(self):
         """Listen for DTMF tones and handle commands"""
+        
+        def ai_command():
+            if self.ai_mode_running:
+                try:
+                    with open(self.config.CANCEL_FILE, "w") as f:
+                        f.write("cancel")
+                    logger.info("AI mode cancel signal sent")
+                except Exception as e:
+                    logger.error(f"Failed to write cancel file: {e}")
+            else:
+                self.play_ai_mode = True
+                logger.info("AI mode activation requested")
+
+        command_map = {
+            '*': ai_command,
+            '#': lambda: self.command_schedule("play_menu",    "Menu playback scheduled"),
+            '0': lambda: self.command_schedule("play_info",    "Repeater info playback scheduled"),          
+            '1': lambda: self.command_schedule("play_time",    "Time and date playback scheduled"),
+            '2': lambda: self.command_schedule("play_weather", "Weather playback scheduled"),
+            '3': lambda: self.command_schedule("play_band",    "Band conditions playback scheduled"),
+            '4': lambda: self.command_schedule("play_fact",    "Random fun fact playback scheduled"),            
+            '5': lambda: self.command_schedule("lookup_callsign", "Callsign lookup scheduled"),
+            '6': lambda: self.command_schedule("play_satpass", "Satellite pass playback scheduled"),
+            '7': lambda: self.command_schedule("play_meme",    "Random meme playback scheduled"),
+        }
+
         while True:
             try:
                 detected = detect_dtmf()
                 if detected:
                     self.dt_detected = detected
                     logger.info(f"DTMF detected: {detected}")
-                    
-                    if detected == '*':
-                        if self.ai_mode_running:
-                            # Cancel AI mode
-                            try:
-                                with open(self.config.CANCEL_FILE, "w") as f:
-                                    f.write("cancel")
-                                logger.info("AI mode cancel signal sent")
-                            except Exception as e:
-                                logger.error(f"Failed to write cancel file: {e}")
-                        else:
-                            # Start AI mode
-                            self.play_ai_mode = True
-                            logger.info("AI mode activation requested")
-                            
-                    elif detected == '#':
-                        if not self.play_menu:
-                            self.play_menu = True
-                            logger.info("Menu playback scheduled")
-                            
-                    elif detected == '0':
-                        if not self.play_info:
-                            self.play_info = True
-                            logger.info("Repeater info playback scheduled")
-                            
-                    elif detected == '7':
-                        if not self.play_meme:
-                            self.play_meme = True
-                            logger.info("Random meme playback scheduled")
-                            
-                    elif detected == '4':
-                        if not self.play_fact:
-                            self.play_fact = True
-                            logger.info("Random fun fact playback scheduled")
-                            
-                    elif detected == '1':
-                        if not self.play_time:
-                            self.play_time = True
-                            logger.info("Time and date playback scheduled")
-                            
-                    elif detected == '2':
-                        if not self.play_weather:
-                            self.play_weather = True
-                            logger.info("Weather playback scheduled")
-                            
-                    elif detected == '3':
-                        if not self.play_band:
-                            self.play_band = True
-                            logger.info("Band conditions playback scheduled")
-                            
-                    elif detected == '6':
-                        if not self.play_satpass:
-                            self.play_satpass = True
-                            logger.info("Satellite pass playback scheduled")
-                            
-                    elif detected == '5':
-                        if not self.lookup_callsign:
-                            self.lookup_callsign = True
-                            logger.info("Callsign lookup scheduled")
-                            
+
+                    handler = command_map.get(detected)
+                    if handler:
+                        handler()
+
             except Exception as e:
                 logger.error(f"Error in DTMF listener: {e}")
-                time.sleep(1)  # Brief pause before retrying
+                time.sleep(1)
     
     def callsign_thread(self):
         """Periodic callsign CW ID"""
@@ -1663,4 +1639,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
