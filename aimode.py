@@ -32,8 +32,9 @@ class AIConfig:
         self.config.read(config_file)
         
         # Audio Settings
-        self.FORMAT = pyaudio.paInt16  # This stays hardcoded
+        self.FORMAT = pyaudio.paInt16
         self.CHANNELS = self.config.getint('Audio', 'channels', fallback=1)
+        self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
@@ -72,6 +73,7 @@ class AIConfig:
         
         default_config['Audio'] = {
             'channels': '1',
+            'input_channel': 'left',
             'rate': '44100',
             'chunk': '1024',
             'threshold': '500'
@@ -405,6 +407,34 @@ class HamRadioAI:
             logger.error(f"Failed to initialize models: {e}")
             raise
     
+    def _process_audio_channels(self, audio_np):
+        """Process audio channels based on configuration"""
+        output_channels = self.config.CHANNELS  # Default to input channels
+        
+        if self.config.CHANNELS == 2:
+            # Reshape to separate channels
+            audio_np = audio_np.reshape(-1, 2)
+            
+            if self.config.INPUT_CHANNEL == 'left':
+                audio_np = audio_np[:, 0]  # Keep only left channel
+                output_channels = 1
+            elif self.config.INPUT_CHANNEL == 'right':
+                audio_np = audio_np[:, 1]  # Keep only right channel
+                output_channels = 1
+            elif self.config.INPUT_CHANNEL == 'mono':
+                audio_np = np.mean(audio_np, axis=1).astype(np.int16)  # Average both
+                output_channels = 1
+            elif self.config.INPUT_CHANNEL == 'both':
+                # Keep stereo - flatten back
+                audio_np = audio_np.flatten()
+                output_channels = 2
+            else:
+                logger.warning(f"Unknown input_channel: {self.config.INPUT_CHANNEL}, using both")
+                audio_np = audio_np.flatten()
+                output_channels = 2
+        
+        return audio_np, output_channels
+    
     @contextmanager
     def audio_stream(self):
         """Context manager for audio stream"""
@@ -489,6 +519,9 @@ class HamRadioAI:
                     try:
                         data = stream.read(self.config.CHUNK, exception_on_overflow=False)
                         audio_np = np.frombuffer(data, dtype=np.int16)
+                        
+                        # Process channels
+                        audio_np, _ = self._process_audio_channels(audio_np)
                     except Exception as e:
                         logger.error(f"Error reading audio data: {e}")
                         continue
@@ -524,8 +557,14 @@ class HamRadioAI:
     def _save_audio_frames(self, frames):
         """Save audio frames to WAV file"""
         try:
+            # Determine output channels based on input_channel setting
+            if self.config.CHANNELS == 2 and self.config.INPUT_CHANNEL in ['left', 'right', 'mono']:
+                output_channels = 1
+            else:
+                output_channels = self.config.CHANNELS
+            
             with wave.open(self.config.OUTPUT_FILE, 'wb') as wf:
-                wf.setnchannels(self.config.CHANNELS)
+                wf.setnchannels(output_channels)
                 wf.setsampwidth(self.pyaudio_instance.get_sample_size(self.config.FORMAT))
                 wf.setframerate(self.config.RATE)
                 wf.writeframes(b''.join(frames))
