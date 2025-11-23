@@ -80,7 +80,8 @@ def ensure_directories():
         "data/databases",
         "config/settings",
         "config/prompts",
-        "flags"
+        "flags",
+        "logs"
     ]
     
     for directory in directories:
@@ -99,13 +100,14 @@ class RepeaterConfig:
         self.config.read(config_file)
         
         # Audio Settings
-        self.FORMAT = pyaudio.paInt16  # This stays hardcoded
+        self.FORMAT = pyaudio.paInt16
         self.CHANNELS = self.config.getint('Audio', 'channels', fallback=1)
         self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
         self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.5)
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
+        self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         
         # Feature flags from arguments
         self.ENABLE_AUDIO_REPEAT = not (args and args.no_audio_repeat)
@@ -247,6 +249,7 @@ class RepeaterConfig:
         
         default_config['Audio'] = {
             'channels': '1',
+            'input_channel': 'left',
             'rate': '44100',
             'chunk': '1024',
             'threshold': '500',
@@ -358,12 +361,10 @@ class HamRepeater:
                 input=True,
                 frames_per_buffer=self.config.CHUNK
             )
-            self.output_stream = self.p.open(
-                format=self.config.FORMAT,
-                channels=self.config.CHANNELS,
-                rate=self.config.RATE,
-                output=True
-            )
+            
+            # Output stream will be recreated dynamically based on channel selection
+            self.output_stream = None
+            
             logger.info("Audio streams initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize audio streams: {e}")
@@ -1100,6 +1101,31 @@ class HamRepeater:
                 data = self.input_stream.read(self.config.CHUNK, exception_on_overflow=False)
                 audio_np = np.frombuffer(data, dtype=np.int16)
                 
+                # Handle channel selection for stereo input
+                output_channels = self.config.CHANNELS  # Default to input channels
+                
+                if self.config.CHANNELS == 2:
+                    # Reshape to separate channels
+                    audio_np = audio_np.reshape(-1, 2)
+                    
+                    if self.config.INPUT_CHANNEL == 'left':
+                        audio_np = audio_np[:, 0]  # Keep only left channel
+                        output_channels = 1  # Output as mono
+                    elif self.config.INPUT_CHANNEL == 'right':
+                        audio_np = audio_np[:, 1]  # Keep only right channel
+                        output_channels = 1  # Output as mono
+                    elif self.config.INPUT_CHANNEL == 'mono':
+                        audio_np = np.mean(audio_np, axis=1).astype(np.int16)  # Average both
+                        output_channels = 1  # Output as mono
+                    elif self.config.INPUT_CHANNEL == 'both':
+                        # Keep stereo - flatten back
+                        audio_np = audio_np.flatten()
+                        output_channels = 2  # Output as stereo
+                    else:
+                        logger.warning(f"Unknown input_channel: {self.config.INPUT_CHANNEL}, using both")
+                        audio_np = audio_np.flatten()
+                        output_channels = 2
+                
                 # Apply audio boost and clipping
                 audio_np = np.clip(
                     audio_np * self.config.AUDIO_BOOST, 
@@ -1110,6 +1136,16 @@ class HamRepeater:
                 # Check if audio is above threshold (someone talking)
                 if np.max(np.abs(audio_np)) > self.config.THRESHOLD:
                     if self.config.ENABLE_AUDIO_REPEAT:
+                        # Recreate output stream if needed with correct channels
+                        if self.output_stream is None or self.output_stream._channels != output_channels:
+                            if self.output_stream:
+                                self.output_stream.close()
+                            self.output_stream = self.p.open(
+                                format=self.config.FORMAT,
+                                channels=output_channels,
+                                rate=self.config.RATE,
+                                output=True
+                            )
                         self.output_stream.write(boosted_data)
                     silent_time = 0
                     was_talking = True
@@ -1639,5 +1675,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
