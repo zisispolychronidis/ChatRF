@@ -1310,6 +1310,7 @@ class HamRepeater:
                                             description = data["weather"][0]["description"]
                                             humidity = data["main"]["humidity"]
                                             windspeed = data["wind"]["speed"]
+                                            city = data["name"]
                                             
                                             # Convert m/s to beaufort
                                             BEAUFORT_LIMITS = [0.5, 1.5, 3.3, 5.5, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6]
@@ -1324,7 +1325,7 @@ class HamRepeater:
                                             forecast = (
                                                 f"Ο καιρός στην περιοχή {city} είναι {description}, "
                                                 f"με θερμοκρασία {temp} βαθμούς Κελσίου, "
-                                                f"υγρασία {humidity} τοις εκατό,"
+                                                f"υγρασία {humidity} τοις εκατό, "
                                                 f"και ανέμους {beaufort} μποφόρ."
                                             )
 
@@ -1718,4 +1719,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
