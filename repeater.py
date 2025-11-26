@@ -19,42 +19,63 @@ from pydub import AudioSegment
 from pydub.playback import play
 from threading import Event
 
-# Configure logging
+# ANSI colors
+LOG_COLORS = {
+    'DEBUG': '\033[90m',     # Bright Black / Gray
+    'INFO': '\033[92m',      # Green
+    'WARNING': '\033[93m',   # Yellow
+    'ERROR': '\033[91m',     # Red
+    'CRITICAL': '\033[95m',  # Magenta
+}
+RESET_COLOR = '\033[0m'
+
+
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        levelname = record.levelname
+        if levelname in LOG_COLORS:
+            colored_level = f"{LOG_COLORS[levelname]}{levelname}{RESET_COLOR}"
+            record.levelname = colored_level
+        return super().format(record)
+
+
 def setup_logging():
-    # Ensure logs directory exists
     os.makedirs("logs", exist_ok=True)
-    
-    # Create formatter
-    formatter = logging.Formatter(
+
+    formatter = ColorFormatter(
         '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    
-    # Get root logger
+
+    # Base logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    
-    # Clear any existing handlers
     logger.handlers.clear()
-    
-    # Console handler
+
+    # Console handler (with COLORS!)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
-    # Create new file when size limit reached
+
+    # File formatter (NO colors for clean logs)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # Rotating file log
     file_handler = RotatingFileHandler(
         'logs/repeater.log',
-        maxBytes=10*1024*1024,  # 10MB per file
-        backupCount=5,  # Keep 5 backup files
+        maxBytes=10*1024*1024,
+        backupCount=5,
         encoding='utf-8'
     )
     file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
-    
-    # Separate error log file
+
+    # Error file log
     error_handler = RotatingFileHandler(
         'logs/repeater_errors.log',
         maxBytes=10*1024*1024,
@@ -62,9 +83,9 @@ def setup_logging():
         encoding='utf-8'
     )
     error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(formatter)
+    error_handler.setFormatter(file_formatter)
     logger.addHandler(error_handler)
-    
+
     return logger
 
 logger = setup_logging()
@@ -1651,6 +1672,28 @@ def main():
         repeater.config.AUDIO_BOOST = args.audio_boost
     if args.threshold:
         repeater.config.THRESHOLD = args.threshold
+
+    banner = r"""   
+                                                                                                    
+          ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                                                                         
+        ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                                                                       
+       ▓▓▓▓▓▓  ▓▓▓▓▓▓▓  ▓▓▓▓▓▓                                                                      
+       ▓▓▓▓▓ ▓▓▓ ▓▓▓ ▓▓▓ ▓▓▓▓▓      ███████   ██                     █    ████████   █████████      
+       ▓▓▓▓▓ ▓▓ ▓   ▓ ▓▓ ▓▓▓▓▓    ███    ███  ██                    ██    ██     ██  ███            
+       ▓▓▓▓▓ ▓▓▓ ▓ ▓ ▓▓▓ ▓▓▓▓▓    ██          ████████   ███████  ██████  ██     ███ ███            
+       ▓▓▓▓▓▓  ▓▓▓ ▓▓▓  ▓▓▓▓▓▓    ██          ███   ███       ███   ██    █████████  █████████      
+       ▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓    ██      ██  ██    ███  ████████   ██    ██   ███   ███            
+       ▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓    ████   ███  ██    ███ ██    ███   ██    ██    ███  ███            
+       ▓▓▓▓▓▓▓▓▓     ▓▓▓▓▓▓▓▓▓      ██████    ██    ███  ████████   ████  ██     ███ ███            
+         ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                                                                        
+            ▓▓▓▓▓                                                                                   
+            ▓▓▓                                                                                     
+                                                                                                    
+                                       ChatRF: AI-Enhanced Repeater
+                                                 By SV2TMT
+    ----------------------------------------------------------------------------------------------
+    """
+    print(banner)
     
     # Log configuration
     logger.info("Starting repeater with configuration:")
@@ -1675,3 +1718,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
