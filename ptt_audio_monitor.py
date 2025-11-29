@@ -2,13 +2,13 @@ import pyaudio
 import numpy as np
 import threading
 import time
-import RPi.GPIO as GPIO
+import gpiod
 import logging
 
 logger = logging.getLogger(__name__)
 
 class SimpleAudioPTT:
-    """Simple PTT controller"""
+    """Simple PTT controller compatible with Raspberry Pi 5"""
     
     def __init__(self, ptt_pin=18, ptt_tail=0.5, 
                  silence_threshold=100, monitor_device=None):
@@ -16,7 +16,7 @@ class SimpleAudioPTT:
         Simple PTT based on monitoring audio output levels
         
         Args:
-            ptt_pin: GPIO pin for PTT
+            ptt_pin: GPIO pin for PTT (BCM numbering)
             ptt_tail: Delay after silence before PTT off
             silence_threshold: Audio level threshold for silence
             monitor_device: Audio device to monitor (None = default)
@@ -31,10 +31,23 @@ class SimpleAudioPTT:
         self.last_audio_time = 0
         self.ptt_timer = None
         
-        # Setup GPIO
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self.ptt_pin, GPIO.OUT)
-        GPIO.output(self.ptt_pin, GPIO.LOW)
+        # Setup GPIO using gpiod (compatible with Pi 5)
+        try:
+            self.chip = gpiod.Chip('gpiochip4')  # Pi 5 uses gpiochip4
+            self.ptt_line = self.chip.get_line(self.ptt_pin)
+            self.ptt_line.request(consumer="PTT", type=gpiod.LINE_REQ_DIR_OUT)
+            self.ptt_line.set_value(0)  # Start with PTT off
+        except Exception as e:
+            logger.error(f"Failed to initialize GPIO: {e}")
+            logger.info("Trying gpiochip0 as fallback...")
+            try:
+                self.chip = gpiod.Chip('gpiochip0')  # Fallback for older Pi models
+                self.ptt_line = self.chip.get_line(self.ptt_pin)
+                self.ptt_line.request(consumer="PTT", type=gpiod.LINE_REQ_DIR_OUT)
+                self.ptt_line.set_value(0)
+            except Exception as e2:
+                logger.error(f"GPIO initialization failed: {e2}")
+                raise
         
         # Setup PyAudio for monitoring
         self.p = pyaudio.PyAudio()
@@ -63,14 +76,14 @@ class SimpleAudioPTT:
     def _ptt_on(self):
         """Turn PTT on"""
         if not self.ptt_active:
-            GPIO.output(self.ptt_pin, GPIO.HIGH)
+            self.ptt_line.set_value(1)  # Set GPIO high
             self.ptt_active = True
             logger.debug("PTT ON")
     
     def _ptt_off(self):
         """Turn PTT off"""
         if self.ptt_active:
-            GPIO.output(self.ptt_pin, GPIO.LOW)
+            self.ptt_line.set_value(0)  # Set GPIO low
             self.ptt_active = False
             logger.debug("PTT OFF")
     
@@ -173,7 +186,12 @@ class SimpleAudioPTT:
         """Clean up resources"""
         self.stop_monitoring()
         self.p.terminate()
-        GPIO.cleanup()
+        
+        # Release GPIO line
+        if hasattr(self, 'ptt_line'):
+            self.ptt_line.release()
+        if hasattr(self, 'chip'):
+            self.chip.close()
 
 # Integration with repeater script
 def ptt_for_repeater(repeater_instance, ptt_pin=18):
