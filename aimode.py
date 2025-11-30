@@ -9,15 +9,83 @@ import logging
 import threading
 import json
 import configparser
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timedelta
 from faster_whisper import WhisperModel
 from contextlib import contextmanager
 from piper import PiperVoice
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# ANSI colors
+LOG_COLORS = {
+    'DEBUG': '\033[90m',     # Bright Black / Gray
+    'INFO': '\033[36m',      # Green
+    'WARNING': '\033[93m',   # Yellow
+    'ERROR': '\033[91m',     # Red
+    'CRITICAL': '\033[95m',  # Magenta
+}
+RESET_COLOR = '\033[0m'
+
+
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        levelname = record.levelname
+        if levelname in LOG_COLORS:
+            colored_level = f"{LOG_COLORS[levelname]}{levelname}{RESET_COLOR}"
+            record.levelname = colored_level
+        return super().format(record)
+
+
+def setup_logging():
+    os.makedirs("logs", exist_ok=True)
+
+    formatter = ColorFormatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # Base logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    # Console handler (with COLORS!)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # File formatter (NO colors for clean logs)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # Rotating file log
+    file_handler = RotatingFileHandler(
+        'logs/aimode.log',
+        maxBytes=10*1024*1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    # Error file log
+    error_handler = RotatingFileHandler(
+        'logs/aimode_errors.log',
+        maxBytes=10*1024*1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(file_formatter)
+    logger.addHandler(error_handler)
+
+    return logger
+
+logger = setup_logging()
 
 class AIConfig:
     """Configuration class for AI mode settings"""
@@ -953,4 +1021,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
