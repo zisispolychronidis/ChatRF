@@ -696,7 +696,7 @@ class HamRadioAI:
         import re
         
         # Greek and English sentence endings
-        sentence_endings = r'[.!?;]'
+        sentence_endings = r'[.!?;,]\s+'
         
         # Split on sentence endings but keep the punctuation
         sentences = re.split(f'({sentence_endings})', text)
@@ -953,3 +953,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
