@@ -670,7 +670,7 @@ class HamRepeater:
         import re
         
         # Sentence endings
-        sentence_endings = r'[.!?;,]'
+        sentence_endings = r'[.!?;,]\s+'
         
         # Split on sentence endings
         sentences = re.split(f'({sentence_endings})', text)
@@ -1719,5 +1719,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
