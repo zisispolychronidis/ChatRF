@@ -1221,7 +1221,7 @@ class HamRepeater:
                                         if facts:
                                             fact = random.choice(facts)
                                             logger.info(f"Speaking fun fact: {fact}")
-                                            self.speak_with_piper(fact)
+                                            self.speak_with_piper(f"Fun fact: {fact}")
                                         else:
                                             logger.warning("fun_facts.txt is empty")
                                     else:
@@ -1719,6 +1719,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
