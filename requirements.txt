@@ -1,4 +1,3 @@
-pyaudio
 numpy
 ollama
 faster-whisper
@@ -11,3 +10,5 @@ jsonschema
 skyfield
 pytz
 scipy
+pyttsx3
+pyaudio
