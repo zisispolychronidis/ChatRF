@@ -761,7 +761,8 @@ class HamRepeater:
         
         # Start subprocess
         try:
-            process = subprocess.Popen(["python", "aimode.py"])
+            import sys
+            process = subprocess.Popen([sys.executable, "aimode.py"])
         except Exception as e:
             logger.error(f"Failed to start AI mode subprocess: {e}")
             loading_stop_event.set()
@@ -1113,7 +1114,7 @@ class HamRepeater:
         if self.config.ENABLE_CW_ID:
             callsign_thread = threading.Thread(target=self.callsign_thread, daemon=True)
             callsign_thread.start()
-        
+
         logger.info("Ham repeater running...")
         
         try:
@@ -1673,7 +1674,7 @@ def main():
         repeater.config.AUDIO_BOOST = args.audio_boost
     if args.threshold:
         repeater.config.THRESHOLD = args.threshold
-
+    
     banner = r"""   
                                                                                                     
           ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                                                                         
@@ -1719,7 +1720,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
