@@ -18,6 +18,8 @@ from dtmf import detect_dtmf
 from pydub import AudioSegment
 from pydub.playback import play
 from threading import Event
+from collections import deque
+from faster_whisper import WhisperModel
 
 # ANSI colors
 LOG_COLORS = {
@@ -129,6 +131,7 @@ class RepeaterConfig:
         self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.5)
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
         self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
+        self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
         
         # Feature flags from arguments
         self.ENABLE_AUDIO_REPEAT = not (args and args.no_audio_repeat)
@@ -136,6 +139,13 @@ class RepeaterConfig:
         self.ENABLE_CW_ID = not (args and args.no_cw_id)
         self.ENABLE_DTMF = not (args and args.no_dtmf)
         self.ENABLE_PTT = not (args and args.no_ptt)
+        
+        # Parse disabled DTMF commands
+        self.DISABLED_DTMF_COMMANDS = set()
+        if args and args.disable_dtmf:
+            # Convert list of command numbers/symbols to a set
+            self.DISABLED_DTMF_COMMANDS = set(args.disable_dtmf)
+            logger.info(f"Disabled DTMF commands: {', '.join(sorted(self.DISABLED_DTMF_COMMANDS))}")
         
         # Flag paths
         self.CANCEL_FILE = self.config.get('Paths', 'cancel_file', fallback='flags/cancel_ai.flag')
@@ -159,6 +169,10 @@ class RepeaterConfig:
         farnsworth = self.config.get('CW', 'farnsworth_wpm', fallback='')
         self.CW_FARNSWORTH_WPM = int(farnsworth) if farnsworth.strip() else None
         self.CW_ID_INTERVAL = self.config.getint('CW', 'id_interval', fallback=600)
+        
+        # Command rate limiting (quota-based)
+        self.MAX_COMMANDS = self.config.getint('Commands', 'max_commands', fallback=4)
+        self.COMMAND_WINDOW = self.config.getint('Commands', 'window_seconds', fallback=60)
         
         # Morse code dictionary (hardcoded)
         self.MORSE_DICT = {
@@ -275,7 +289,8 @@ class RepeaterConfig:
             'chunk': '1024',
             'threshold': '500',
             'silence_time': '0.5',
-            'audio_boost': '5.0'
+            'audio_boost': '5.0',
+            'output_volume': '1.0'
         }
         
         default_config['Paths'] = {
@@ -337,6 +352,11 @@ class RepeaterConfig:
             'fun_facts_file': 'data/databases/fun_facts.txt'
         }
         
+        default_config['Commands'] = {
+            'max_commands': '4',
+            'window_seconds': '60'
+        }
+        
         with open(config_file, 'w') as f:
             default_config.write(f)
         
@@ -351,6 +371,7 @@ class HamRepeater:
         self.play_ai_mode = False
         self.ai_mode_running = False
         self.talking = False
+        self.whisper_model = None
         self.play_menu = False
         self.play_info = False
         self.play_meme = False
@@ -361,6 +382,8 @@ class HamRepeater:
         self.play_satpass = False
         self.lookup_callsign = False
         self.callsign_data = self.load_radioid_data()
+        self.command_times = deque()
+        self.command_lock = threading.Lock()
         
         # Initialize PyAudio
         self.p = pyaudio.PyAudio()
@@ -371,6 +394,9 @@ class HamRepeater:
         # Initialize Piper voice
         self.piper_voice = None
         self._load_piper_voice()
+        
+        #Initialize Whisper
+        self._initialize_whisper()
         
     def _setup_audio_streams(self):
         """Initialize audio input and output streams"""
@@ -390,10 +416,24 @@ class HamRepeater:
         except Exception as e:
             logger.error(f"Failed to initialize audio streams: {e}")
             raise
+            
+    def _initialize_whisper(self):
+        """Initialize whisper model"""
+        try:
+            logger.info("Initializing Whisper model...")
+            self.whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+            logger.info("Whisper model initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize models: {e}")
+            raise
     
     def play_audio(self, filename):
         """Play a WAV or MP3 file through the audio output"""
         try:
+            # Clamp volume to valid range
+            volume = max(0.0, min(5.0, self.config.OUTPUT_VOLUME))
+            
             # Determine file type from extension
             file_ext = filename.lower().split('.')[-1]
             
@@ -403,6 +443,12 @@ class HamRepeater:
                 from pydub.playback import play
                 
                 audio = AudioSegment.from_mp3(filename)
+                # Convert 0-5 scale to dB: 1.0->0dB, 2.0->+6dB, 5.0->+14dB
+                if volume > 0:
+                    volume_db = 20 * np.log10(volume)
+                    audio = audio + volume_db
+                else:
+                    audio = audio - 60  # Effectively mute
                 play(audio)
                 
             elif file_ext == 'wav':
@@ -417,7 +463,12 @@ class HamRepeater:
                     
                     data = wf.readframes(self.config.CHUNK)
                     while data:
-                        audio_stream.write(data)
+                        # Convert bytes to numpy array for volume adjustment
+                        audio_data = np.frombuffer(data, dtype=np.int16)
+                        # Apply volume (with gain) and clip to prevent distortion
+                        audio_data = np.clip(audio_data * volume, -32768, 32767).astype(np.int16)
+                        # Write adjusted audio
+                        audio_stream.write(audio_data.tobytes())
                         data = wf.readframes(self.config.CHUNK)
                     
                     audio_stream.close()
@@ -729,7 +780,7 @@ class HamRepeater:
                 
                 # Small pause between sentences (except for the last one)
                 if i < len(sentences) - 1:
-                    time.sleep(0.3)  # 300ms
+                    time.sleep(0.1)  # 100ms
                 
                 # Clean up temp file
                 if os.path.exists(temp_file):
@@ -801,7 +852,8 @@ class HamRepeater:
         # Only play timeout if exited normally
         # Don't play if it was an early exit
         if ai_ready[0] and not timeout_played[0]:
-            time.sleep(0.6)
+            while self.talking:
+                time.sleep(0.5)
             self.play_audio(self.config.TIMEOUT_FILE)
         
         self.ai_mode_running = False
@@ -935,10 +987,30 @@ class HamRepeater:
             logger.error(f"Database lookup error: {e}")
             return None
     
+    def command_allowed(self):
+        """Command watchdog"""
+        now = time.time()
+
+        with self.command_lock:
+            # Remove timestamps outside the time window
+            while self.command_times and now - self.command_times[0] > self.config.COMMAND_WINDOW:
+                self.command_times.popleft()
+
+            if len(self.command_times) >= self.config.MAX_COMMANDS:
+                logger.warning(f"Command rate limit exceeded {self.config.MAX_COMMANDS}/{self.config.COMMAND_WINDOW}s")
+                while self.talking:
+                    time.sleep(0.5)
+                self.speak_with_piper(f"Παρακαλώ περιμένετε {int(round((self.command_times[0] + self.config.COMMAND_WINDOW) - now))} δευτερόλεπτα.")
+                return False
+
+            self.command_times.append(now)
+            return True
+    
     def command_schedule(self, attr, message):
-        if not getattr(self, attr):
-            setattr(self, attr, True)
-            logger.info(message)
+        if not self.ai_mode_running: # Run only outside AI mode
+            if not getattr(self, attr):
+                setattr(self, attr, True)
+                logger.info(message)
     
     def dtmf_listener(self):
         """Listen for DTMF tones and handle commands"""
@@ -974,10 +1046,16 @@ class HamRepeater:
                 if detected:
                     self.dt_detected = detected
                     logger.info(f"DTMF detected: {detected}")
+                    
+                    # Check if this command is disabled
+                    if detected in self.config.DISABLED_DTMF_COMMANDS:
+                        logger.info(f"DTMF command {detected} is disabled, ignoring")
+                        continue
 
                     handler = command_map.get(detected)
                     if handler:
-                        handler()
+                        if self.command_allowed():
+                            handler()
 
             except Exception as e:
                 logger.error(f"Error in DTMF listener: {e}")
@@ -1048,9 +1126,10 @@ class HamRepeater:
     def transcribe_audio_whisper(self, filename):
         """Speech To Text conversion with FasterWhisper"""
         try:
-            from faster_whisper import WhisperModel
-            model = WhisperModel("small", compute_type="int8")  # Model size
-            segments, _ = model.transcribe(filename, language="en")
+            segments, _ = self.whisper_model.transcribe(
+                filename, 
+                language="en"
+            )
             result = "".join([seg.text for seg in segments]).strip().upper()
             logger.info(f"Transcribed callsign input: {result}")
             return result
@@ -1546,7 +1625,7 @@ class HamRepeater:
                             if self.lookup_callsign:
                                 try:
                                     self.play_audio(self.config.CALLSIGN_PROMPT_FILE)
-                                    audio_file = self.record_callsign_audio(duration=8)  # Shorter duration
+                                    audio_file = self.record_callsign_audio(duration=8)
                                     if not audio_file:
                                         raise Exception("Audio recording failed")
 
@@ -1619,7 +1698,27 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
         description='ChatRF: AI-Enhanced Ham Radio Repeater',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+DTMF Command List:
+  *  - AI Mode (Enable/disable)
+  #  - Menu
+  0  - Repeater Info
+  1  - Time and Date
+  2  - Weather
+  3  - Band Conditions
+  4  - Random Fun Fact
+  5  - Callsign Lookup
+  6  - Satellite Passes
+  7  - Random Meme
+
+Examples:
+  # Disable AI mode and weather commands
+  python repeater.py --disable-dtmf * 2
+  
+  # Disable all number commands but keep * and #
+  python repeater.py --disable-dtmf 0 1 2 3 4 5 6 7
+        """
     )
     
     parser.add_argument(
@@ -1638,6 +1737,13 @@ def main():
         '--no-cw-id',
         action='store_true',
         help='Disable periodic CW callsign identification'
+    )
+    
+    parser.add_argument(
+        '--disable-dtmf',
+        nargs='+',
+        metavar='CMD',
+        help='Disable specific DTMF commands (e.g., --disable-dtmf * 2 5 to disable AI mode, weather, and callsign lookup)'
     )
     
     parser.add_argument(
@@ -1706,6 +1812,10 @@ def main():
     logger.info(f"  PTT Control: {repeater.config.ENABLE_PTT}")
     logger.info(f"  Audio Boost: {repeater.config.AUDIO_BOOST}")
     logger.info(f"  Threshold: {repeater.config.THRESHOLD}")
+    if repeater.config.DISABLED_DTMF_COMMANDS:
+        logger.info(f"  Disabled DTMF Commands: {', '.join(sorted(repeater.config.DISABLED_DTMF_COMMANDS))}")
+    else:
+        logger.info(f"  DTMF Commands: All enabled")
     
     # PTT via Raspberry Pi GPIO
     if repeater.config.ENABLE_PTT:
