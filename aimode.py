@@ -106,6 +106,7 @@ class AIConfig:
         self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
+        self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
         
         # File paths
         self.OUTPUT_FILE = self.config.get('Paths', 'output_file', fallback='audio/temp/recorded_audio.wav')
@@ -144,7 +145,8 @@ class AIConfig:
             'input_channel': 'left',
             'rate': '44100',
             'chunk': '1024',
-            'threshold': '500'
+            'threshold': '500',
+            'output_volume': '1.0'
         }
         
         default_config['Paths'] = {
@@ -725,6 +727,9 @@ class HamRadioAI:
     def play_audio(self, filename):
         """Play a WAV file through the audio output"""
         try:
+            # Clamp volume to valid range
+            volume = max(0.0, min(5.0, self.config.OUTPUT_VOLUME))
+        
             with wave.open(filename, 'rb') as wf:
                 audio_stream = self.pyaudio_instance.open(
                     format=self.pyaudio_instance.get_format_from_width(wf.getsampwidth()),
@@ -736,7 +741,12 @@ class HamRadioAI:
                 chunk_size = 1024
                 data = wf.readframes(chunk_size)
                 while data:
-                    audio_stream.write(data)
+                    # Convert bytes to numpy array for volume adjustment
+                    audio_data = np.frombuffer(data, dtype=np.int16)
+                    # Apply volume (with gain) and clip to prevent distortion
+                    audio_data = np.clip(audio_data * volume, -32768, 32767).astype(np.int16)
+                    # Write adjusted audio
+                    audio_stream.write(audio_data.tobytes())
                     data = wf.readframes(chunk_size)
                 
                 audio_stream.close()
