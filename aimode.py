@@ -764,7 +764,7 @@ class HamRadioAI:
         import re
         
         # Greek and English sentence endings
-        sentence_endings = r'[.!?;,]\s+'
+        sentence_endings = r'[.!?;]'
         
         # Split on sentence endings but keep the punctuation
         sentences = re.split(f'({sentence_endings})', text)
@@ -832,7 +832,7 @@ class HamRadioAI:
                 
                 # Small pause between sentences (except for the last one)
                 if i < len(sentences) - 1:
-                    time.sleep(0.4)  # 400ms pause between sentences for AI responses
+                    time.sleep(0.1)  # 100ms pause between sentences for AI responses
                 
                 # Clean up temp file
                 if os.path.exists(temp_file):
@@ -916,6 +916,7 @@ class HamRadioAI:
             return True  # Continue session
         
         # Speak the response (typing sound should already be stopped)
+        time.sleep(0.5)
         success = self.speak_text(ai_response)
         if not success:
             logger.warning("Failed to speak AI response")
@@ -1021,5 +1022,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
