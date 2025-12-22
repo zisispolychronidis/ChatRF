@@ -62,6 +62,8 @@ Ham radio has always been about innovation, but repeaters have barely changed si
 - `--no-audio-repeat`: Disable audio repeating (monitor mode only)
 - `--no-roger`: Disable roger beep at end of transmission
 - `--no-cw-id`: Disable periodic CW callsign identification
+- `--no-voice-id`: Disable periodic voice/audio station identification
+- `--disable-dtmf [CMD ...]`: Disable specific DTMF commands
 - `--no-dtmf`: Disable DTMF command listening
 - `--no-ptt`: Disable PTT control via Raspberry Pi GPIO **(REQUIRED on Windows)**
 - `--audio-boost AUDIO_BOOST`: Audio boost factor (default: 5.0)
