@@ -147,6 +147,13 @@ class RepeaterConfig:
             # Convert list of command numbers/symbols to a set
             self.DISABLED_DTMF_COMMANDS = set(args.disable_dtmf)
             logger.info(f"Disabled DTMF commands: {', '.join(sorted(self.DISABLED_DTMF_COMMANDS))}")
+            
+        # DTMF Prefix settings
+        self.DTMF_PREFIX = self.config.get('Commands', 'dtmf_prefix', fallback='')
+        if self.DTMF_PREFIX:
+            logger.info(f"DTMF prefix required: '{self.DTMF_PREFIX}'")
+        else:
+            logger.info("No DTMF prefix required (direct command mode)")
         
         # Flag paths
         self.CANCEL_FILE = self.config.get('Paths', 'cancel_file', fallback='flags/cancel_ai.flag')
@@ -358,7 +365,8 @@ class RepeaterConfig:
         
         default_config['Commands'] = {
             'max_commands': '4',
-            'window_seconds': '60'
+            'window_seconds': '60',
+            'dtmf_prefix': ''
         }
         
         with open(config_file, 'w') as f:
@@ -388,6 +396,9 @@ class HamRepeater:
         self.callsign_data = self.load_radioid_data()
         self.command_times = deque()
         self.command_lock = threading.Lock()
+        self.dtmf_buffer = []
+        self.dtmf_buffer_timeout = 3.0
+        self.last_dtmf_time = 0
         
         # Initialize PyAudio
         self.p = pyaudio.PyAudio()
@@ -1049,17 +1060,63 @@ class HamRepeater:
                 detected = detect_dtmf()
                 if detected:
                     self.dt_detected = detected
-                    logger.info(f"DTMF detected: {detected}")
+                    current_time = time.time()
                     
-                    # Check if this command is disabled
-                    if detected in self.config.DISABLED_DTMF_COMMANDS:
-                        logger.info(f"DTMF command {detected} is disabled, ignoring")
-                        continue
+                    # Reset buffer if timeout exceeded
+                    if current_time - self.last_dtmf_time > self.dtmf_buffer_timeout:
+                        self.dtmf_buffer = []
+                    
+                    self.last_dtmf_time = current_time
+                    self.dtmf_buffer.append(detected)
+                    
+                    # Build current sequence
+                    current_sequence = ''.join(self.dtmf_buffer)
+                    if self.config.DTMF_PREFIX:
+                        logger.info(f"DTMF detected: {detected} (sequence: {current_sequence})")
+                    else:
+                        logger.info(f"DTMF detected: {detected}")
+                    
+                    # Initialize command to execute
+                    command_to_execute = None
+                    
+                    # If prefix is required
+                    if self.config.DTMF_PREFIX:
+                        # Check if we have the complete prefix with the command
+                        if len(current_sequence) >= len(self.config.DTMF_PREFIX) + 1:
+                            # Extract prefix and command
+                            received_prefix = current_sequence[:len(self.config.DTMF_PREFIX)]
+                            command = current_sequence[len(self.config.DTMF_PREFIX)]
+                            
+                            if received_prefix == self.config.DTMF_PREFIX:
+                                # Valid prefix, set command to execute
+                                command_to_execute = command
+                            else:
+                                logger.info(f"Invalid prefix: {received_prefix} (expected: {self.config.DTMF_PREFIX})")
+                            
+                            # Reset buffer
+                            self.dtmf_buffer = []
+                        
+                        # Check if current sequence is too long (invalid)
+                        elif len(current_sequence) > len(self.config.DTMF_PREFIX) * 2:
+                            logger.warning(f"DTMF sequence too long without valid prefix, resetting")
+                            self.dtmf_buffer = []
+                    
+                    else:
+                        # Normal command mode
+                        command_to_execute = detected
+                        self.dtmf_buffer = []
+                    
+                    # Execute command if one was determined
+                    if command_to_execute:
+                        # Check if this command is disabled
+                        if command_to_execute in self.config.DISABLED_DTMF_COMMANDS:
+                            logger.info(f"DTMF command {command_to_execute} is disabled, ignoring")
+                            continue
 
-                    handler = command_map.get(detected)
-                    if handler:
-                        if self.command_allowed():
-                            handler()
+                        handler = command_map.get(command_to_execute)
+                        if handler:
+                            if self.command_allowed():
+                                handler()
 
             except Exception as e:
                 logger.error(f"Error in DTMF listener: {e}")
