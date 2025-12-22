@@ -137,6 +137,7 @@ class RepeaterConfig:
         self.ENABLE_AUDIO_REPEAT = not (args and args.no_audio_repeat)
         self.ENABLE_ROGER_BEEP = not (args and args.no_roger)
         self.ENABLE_CW_ID = not (args and args.no_cw_id)
+        self.ENABLE_VOICE_ID = not (args and args.no_voice_id)
         self.ENABLE_DTMF = not (args and args.no_dtmf)
         self.ENABLE_PTT = not (args and args.no_ptt)
         
@@ -169,6 +170,8 @@ class RepeaterConfig:
         farnsworth = self.config.get('CW', 'farnsworth_wpm', fallback='')
         self.CW_FARNSWORTH_WPM = int(farnsworth) if farnsworth.strip() else None
         self.CW_ID_INTERVAL = self.config.getint('CW', 'id_interval', fallback=600)
+        
+        self.VOICE_ID_INTERVAL = self.config.getint('CW', 'voice_id_interval', fallback=1200)
         
         # Command rate limiting (quota-based)
         self.MAX_COMMANDS = self.config.getint('Commands', 'max_commands', fallback=4)
@@ -312,7 +315,8 @@ class RepeaterConfig:
             'callsign': 'SV2TMT',
             'wpm': '20',
             'farnsworth_wpm': '',
-            'id_interval': '600'
+            'id_interval': '600',
+            'voice_id_interval': '1200'
         }
         
         default_config['Piper'] = {
@@ -1070,6 +1074,15 @@ class HamRepeater:
                 time.sleep(1)
             self.play_text_morse(self.config.CALLSIGN)
             
+    def voiceid_thread(self):
+        """Periodic voice/audio ID"""
+        while True:
+            time.sleep(self.config.VOICE_ID_INTERVAL)
+            # Wait if currently talking
+            while self.talking:
+                time.sleep(1)
+            self.play_audio(self.config.REPEATER_INFO_FILE)
+            
     def fetch_tles(self):
         """Fetch TLE data for satellite passses"""
         combined = ""
@@ -1193,6 +1206,11 @@ class HamRepeater:
         if self.config.ENABLE_CW_ID:
             callsign_thread = threading.Thread(target=self.callsign_thread, daemon=True)
             callsign_thread.start()
+            
+        voiceid_thread = None
+        if self.config.ENABLE_VOICE_ID:
+            voiceid_thread = threading.Thread(target=self.voiceid_thread, daemon=True)
+            voiceid_thread.start()
 
         logger.info("Ham repeater running...")
         
@@ -1740,6 +1758,12 @@ Examples:
     )
     
     parser.add_argument(
+        '--no-voice-id',
+        action='store_true',
+        help='Disable periodic voice/audio station identification'
+    )
+    
+    parser.add_argument(
         '--disable-dtmf',
         nargs='+',
         metavar='CMD',
@@ -1808,6 +1832,7 @@ Examples:
     logger.info(f"  Audio Repeat: {repeater.config.ENABLE_AUDIO_REPEAT}")
     logger.info(f"  Roger Beep: {repeater.config.ENABLE_ROGER_BEEP}")
     logger.info(f"  CW ID: {repeater.config.ENABLE_CW_ID}")
+    logger.info(f"  Voice ID: {repeater.config.ENABLE_VOICE_ID}")
     logger.info(f"  DTMF Commands: {repeater.config.ENABLE_DTMF}")
     logger.info(f"  PTT Control: {repeater.config.ENABLE_PTT}")
     logger.info(f"  Audio Boost: {repeater.config.AUDIO_BOOST}")
