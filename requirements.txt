@@ -12,3 +12,4 @@ pytz
 scipy
 pyttsx3
 pyaudio
+audioop-lts
