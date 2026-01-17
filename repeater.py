@@ -12,6 +12,7 @@ import configparser
 import re
 import pydub
 from logging.handlers import RotatingFileHandler
+from module_loader import ModuleManager
 from pathlib import Path
 from piper import PiperVoice
 from dtmf import detect_dtmf
@@ -384,15 +385,13 @@ class HamRepeater:
         self.ai_mode_running = False
         self.talking = False
         self.whisper_model = None
+        self.module_manager = ModuleManager(self)
         self.play_menu = False
         self.play_info = False
         self.play_meme = False
-        self.play_fact = False
         self.play_time = False
         self.play_weather = False
         self.play_band = False
-        self.play_satpass = False
-        self.lookup_callsign = False
         self.callsign_data = self.load_radioid_data()
         self.command_times = deque()
         self.command_lock = threading.Lock()
@@ -410,8 +409,11 @@ class HamRepeater:
         self.piper_voice = None
         self._load_piper_voice()
         
-        #Initialize Whisper
+        # Initialize Whisper
         self._initialize_whisper()
+
+        # Initialize Modules
+        self.module_manager.load_all_modules()
         
     def _setup_audio_streams(self):
         """Initialize audio input and output streams"""
@@ -440,8 +442,9 @@ class HamRepeater:
             logger.info("Whisper model initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize models: {e}")
-            raise
+            logger.error(f"Failed to initialize Whisper: {e}")
+            logger.error(f"Continuing without speech-to-text")
+            self.whisper_model = None
     
     def play_audio(self, filename):
         """Play a WAV or MP3 file through the audio output"""
@@ -948,8 +951,7 @@ class HamRepeater:
                 conn.execute('''
                     CREATE TABLE IF NOT EXISTS callsigns (
                         callsign TEXT PRIMARY KEY,
-                        first_name TEXT,
-                        last_name TEXT,
+                        name TEXT,
                         city TEXT,
                         country TEXT
                     )
@@ -960,15 +962,14 @@ class HamRepeater:
                     data = [
                         (
                             row["CALLSIGN"].strip().upper(),
-                            row["FIRST_NAME"].strip(),
-                            row["LAST_NAME"].strip(),
+                            row["NAME"].strip(),
                             row["CITY"].strip(),
                             row["COUNTRY"].strip()
                         )
                         for row in reader
                     ]
 
-                conn.executemany('INSERT OR REPLACE INTO callsigns VALUES (?, ?, ?, ?, ?)', data)
+                conn.executemany('INSERT OR REPLACE INTO callsigns VALUES (?, ?, ?, ?)', data)
                 conn.commit()
                 conn.close()
                 logger.info("SQLite callsign database updated.")
@@ -992,10 +993,9 @@ class HamRepeater:
             
             if result:
                 return {
-                    "first": result[1],
-                    "last": result[2], 
-                    "city": result[3],
-                    "country": result[4]
+                    "name": result[1], 
+                    "city": result[2],
+                    "country": result[3]
                 }
             return None
         except Exception as e:
@@ -1044,15 +1044,12 @@ class HamRepeater:
 
         command_map = {
             '*': ai_command,
-            '#': lambda: self.command_schedule("play_menu",    "Menu playback scheduled"),
-            '0': lambda: self.command_schedule("play_info",    "Repeater info playback scheduled"),          
-            '1': lambda: self.command_schedule("play_time",    "Time and date playback scheduled"),
+            '#': lambda: self.command_schedule("play_menu", "Menu playback scheduled"),
+            '0': lambda: self.command_schedule("play_info", "Repeater info playback scheduled"),          
+            '1': lambda: self.command_schedule("play_time", "Time and date playback scheduled"),
             '2': lambda: self.command_schedule("play_weather", "Weather playback scheduled"),
-            '3': lambda: self.command_schedule("play_band",    "Band conditions playback scheduled"),
-            '4': lambda: self.command_schedule("play_fact",    "Random fun fact playback scheduled"),            
-            '5': lambda: self.command_schedule("lookup_callsign", "Callsign lookup scheduled"),
-            '6': lambda: self.command_schedule("play_satpass", "Satellite pass playback scheduled"),
-            '7': lambda: self.command_schedule("play_meme",    "Random meme playback scheduled"),
+            '3': lambda: self.command_schedule("play_band", "Band conditions playback scheduled"),
+            '7': lambda: self.command_schedule("play_meme", "Random meme playback scheduled"),
         }
 
         while True:
@@ -1108,15 +1105,22 @@ class HamRepeater:
                     
                     # Execute command if one was determined
                     if command_to_execute:
-                        # Check if this command is disabled
+                        # Check if disabled
                         if command_to_execute in self.config.DISABLED_DTMF_COMMANDS:
                             logger.info(f"DTMF command {command_to_execute} is disabled, ignoring")
                             continue
 
+                        # Try hardcoded commands first
                         handler = command_map.get(command_to_execute)
                         if handler:
                             if self.command_allowed():
                                 handler()
+                        else:
+                            # Try module system
+                            if self.module_manager.handle_dtmf_command(command_to_execute):
+                                logger.info(f"Command {command_to_execute} handled by module")
+                            else:
+                                logger.warning(f"Unknown DTMF command: {command_to_execute}")
 
             except Exception as e:
                 logger.error(f"Error in DTMF listener: {e}")
@@ -1326,6 +1330,9 @@ class HamRepeater:
                     silent_time = 0
                     was_talking = True
                     self.talking = True
+
+                    # Trigger on_transmission_start event
+                    self.module_manager.trigger_event("on_transmission_start")
                 else:
                     # Handle silence after talking
                     if was_talking:
@@ -1333,12 +1340,16 @@ class HamRepeater:
                             start_silent = time.time()
                         silent_time = time.time() - start_silent
                         
+                        # Only run modules if there is silence
                         if silent_time >= self.config.SILENCE_TIME:
                             """Feature/Module logic"""
-                            # Only run modules if there is silence
+                            # Trigger on_transmission_end event
+                            self.module_manager.trigger_event("on_transmission_end")
+
                             # Only play roger beep if enabled and AI mode is not about to start
                             if self.config.ENABLE_ROGER_BEEP and not (self.play_ai_mode and not self.ai_mode_running):
                                 self.play_tone()  # Roger beep
+                                self.module_manager.trigger_event("on_silence")
                             
                             # Menu playback
                             if self.play_menu:
@@ -1365,26 +1376,6 @@ class HamRepeater:
                                     logger.error(f"Error during meme playback: {e}")
                                 finally:
                                     self.play_meme = False
-                            
-                            # Fun Fact playback
-                            if self.play_fact:
-                                try:
-                                    fact_file = self.config.FUN_FACTS_FILE
-                                    if os.path.exists(fact_file):
-                                        with open(fact_file, "r", encoding="utf-8") as f:
-                                            facts = [line.strip() for line in f if line.strip()]
-                                        if facts:
-                                            fact = random.choice(facts)
-                                            logger.info(f"Speaking fun fact: {fact}")
-                                            self.speak_with_piper(f"Fun fact: {fact}")
-                                        else:
-                                            logger.warning("fun_facts.txt is empty")
-                                    else:
-                                        logger.warning("fun_facts.txt not found")
-                                except Exception as e:
-                                    logger.error(f"Error during fun fact playback: {e}")
-                                finally:
-                                    self.play_fact = False
                                     
                             # Time and Date playback
                             if self.play_time:
@@ -1562,181 +1553,10 @@ class HamRepeater:
                                     logger.error(f"Error during band conditions playback: {e}")
                                 finally:
                                     self.play_band = False
-                                    
-                            # Satellite Pass playback
-                            if self.play_satpass:
-                                try:
-                                    import pyttsx3
-                                    from datetime import datetime, timedelta
-                                    import pytz
-                                    from pytz import timezone
-                                    from skyfield.api import EarthSatellite, Topos, load, Loader, utc
 
-                                    # Observer position
-                                    observer = Topos(latitude_degrees=self.config.LATITUDE, 
-                                                     longitude_degrees=self.config.LONGITUDE, 
-                                                     elevation_m=self.config.ELEVATION)
-                                    local_tz = pytz.timezone(self.config.TIMEZONE)
-                                    ts = load.timescale()
-                                    now = ts.now()
-                                    t_end = ts.utc((datetime.utcnow() + timedelta(hours=24)).replace(tzinfo=utc))
-
-                                    # Fetch TLEs
-                                    tle_text = self.fetch_tles()
-                                    lines = tle_text.strip().splitlines()
-
-                                    # Parse TLEs into Skyfield satellites
-                                    satellites = []
-                                    
-                                    # Name matching
-                                    def name_matches(tle_name, target_names):
-                                        tle_name_upper = tle_name.upper()
-                                        for target in target_names:
-                                            target_upper = target.upper()
-                                            
-                                            # Check for exact match first
-                                            if target_upper == tle_name_upper:
-                                                return True
-                                            
-                                            # For satellites with numbers, be more precise
-                                            if any(char.isdigit() for char in target_upper):
-                                                # Extract the base name and number from target
-                                                target_parts = target_upper.replace('(', ' ').replace(')', ' ').split()
-                                                tle_parts = tle_name_upper.replace('(', ' ').replace(')', ' ').split()
-                                                
-                                                # Check if all parts of target are in TLE name
-                                                if all(part in tle_parts for part in target_parts):
-                                                    return True
-                                            else:
-                                                # For non-numbered satellites, allow partial matching
-                                                if target_upper in tle_name_upper or tle_name_upper in target_upper:
-                                                    return True
-                                        
-                                        return False
-
-                                    i = 0
-                                    while i < len(lines):
-                                        line = lines[i].strip()
-                                        
-                                        # Skip empty lines
-                                        if not line:
-                                            i += 1
-                                            continue
-                                            
-                                        # Check if this looks like a satellite name (not starting with 1 or 2)
-                                        if not line.startswith(('1 ', '2 ')):
-                                            # This should be a satellite name
-                                            if i + 2 < len(lines):  # Make sure we have 2 more lines
-                                                name = line
-                                                line1 = lines[i + 1].strip()
-                                                line2 = lines[i + 2].strip()
-                                                
-                                                # Verify the next two lines are TLE data
-                                                if line1.startswith('1 ') and line2.startswith('2 '):
-                                                    if name_matches(name, self.config.SATELLITES_TO_TRACK):
-                                                        try:
-                                                            sat = EarthSatellite(line1, line2, name, ts)
-                                                            satellites.append(sat)
-                                                            print(f"Added satellite: {name}")  # Debug print
-                                                        except Exception as e:
-                                                            print(f"Error creating satellite {name}: {e}")
-                                                    i += 3  # Skip the 3 lines we just processed
-                                                else:
-                                                    i += 1  # Just skip this line if it's not followed by TLE data
-                                            else:
-                                                i += 1
-                                        else:
-                                            i += 1
-
-                                    print(f"Total satellites loaded: {len(satellites)}")  # Debug print
-
-                                    load = Loader("data/cache") # Initialize custom path
-                                    eph = load("de421.bsp")  # Required by skyfield
-                                    
-                                    # Find upcoming AOS events for each satellite
-                                    passes = []
-                                    
-                                    for sat in satellites:
-                                        try:
-                                            times, events = sat.find_events(observer, now, t_end, altitude_degrees=10.0)
-                                            print(f"Found {len(times)} events for {sat.name}")  # Debug print
-                                            
-                                            for t, event in zip(times, events):
-                                                if event == 0:  # AOS
-                                                    dt_utc = t.utc_datetime()
-                                                    dt_local = dt_utc.replace(tzinfo=pytz.utc).astimezone(local_tz)
-                                                    passes.append((sat.name, dt_local))
-                                                    print(f"AOS for {sat.name}: {dt_local}")  # Debug print
-                                                    break  # Only take first AOS per satellite
-                                                    
-                                        except Exception as e:
-                                            print(f"Error finding events for {sat.name}: {e}")
-
-                                    if not passes:
-                                        spoken = "Δεν βρέθηκαν επικείμενες διελεύσεις δορυφόρων."
-                                    else:
-                                        # Sort and limit
-                                        passes.sort(key=lambda x: x[1])
-                                        spoken_parts = []
-
-                                        for name, dt in passes[:3]:
-                                            hour = dt.hour % 12
-                                            minute = dt.minute
-                                            hour_str = self.config.GREEK_HOUR_NAMES.get(hour, str(hour))
-                                            minute_str = f"{minute:02d}"
-                                            spoken_parts.append(f"{name}: {hour_str} και {minute_str}")
-
-                                        spoken = "Οι επόμενες διελεύσεις είναι: " + ", ".join(spoken_parts) + " ώρα Ελλάδος."
-
-                                    logger.info(f"Speaking satellite passes: {spoken}")
-                                    self.speak_with_piper(spoken)
-
-                                except Exception as e:
-                                    logger.error(f"Error during satellite pass playback: {e}")
-                                finally:
-                                    self.play_satpass = False
-                                    
-                            # Callsign lookup
-                            if self.lookup_callsign:
-                                try:
-                                    self.play_audio(self.config.CALLSIGN_PROMPT_FILE)
-                                    audio_file = self.record_callsign_audio(duration=8)
-                                    if not audio_file:
-                                        raise Exception("Audio recording failed")
-
-                                    raw_transcription = self.transcribe_audio_whisper(audio_file)
-                                    callsign_text = self.extract_callsign_from_text(raw_transcription)
-                                    
-                                    if not callsign_text:
-                                        message = "Δεν κατάλαβα το διακριτικό. Παρακαλώ δοκιμάστε ξανά."
-                                    else:
-                                        info = self.lookup_callsign_in_db(callsign_text)
-                                        if info:
-                                            name = f"{info['first']} {info['last']}".strip()
-                                            city = info['city']
-                                            country = info['country']
-                                            message = (
-                                                f"Το διακριτικό {' '.join(callsign_text)} ανήκει στον {name} "
-                                                f"από {city}, {country}."
-                                            )
-                                        else:
-                                            message = f"Δεν βρέθηκε το διακριτικό {' '.join(callsign_text)}."
-
-                                    logger.info(f"Speaking lookup result: {message}")
-                                    self.speak_with_piper(message)
-                                    
-                                    # Clean up audio file
-                                    if os.path.exists(audio_file):
-                                        os.remove(audio_file)
-
-                                except Exception as e:
-                                    logger.error(f"Error during callsign lookup: {e}")
-                                    # Play error message
-                                    error_msg = "Σφάλμα κατά την αναζήτηση διακριτικού."
-                                    self.speak_with_piper(error)
-                                finally:
-                                    self.lookup_callsign = False
-
+                            # Custom Modules Playback
+                            self.module_manager.check_flags()
+                            
                             was_talking = False
                             self.talking = False
                             silent_time = 0
@@ -1766,6 +1586,9 @@ class HamRepeater:
         if self.p:
             self.p.terminate()
         
+        # Shutdown all modules
+        self.module_manager.shutdown_all()
+
         self.cleanup_files()
         logger.info("Repeater shutdown complete")
 
@@ -1862,7 +1685,8 @@ Examples:
     if args.threshold:
         repeater.config.THRESHOLD = args.threshold
     
-    banner = r"""   
+    banner = r"""
+    ----------------------------------------------------------------------------------------------   
                                                                                                     
           ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                                                                         
         ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                                                                       
@@ -1890,12 +1714,13 @@ Examples:
     logger.info(f"  Roger Beep: {repeater.config.ENABLE_ROGER_BEEP}")
     logger.info(f"  CW ID: {repeater.config.ENABLE_CW_ID}")
     logger.info(f"  Voice ID: {repeater.config.ENABLE_VOICE_ID}")
-    logger.info(f"  DTMF Commands: {repeater.config.ENABLE_DTMF}")
     logger.info(f"  PTT Control: {repeater.config.ENABLE_PTT}")
     logger.info(f"  Audio Boost: {repeater.config.AUDIO_BOOST}")
     logger.info(f"  Threshold: {repeater.config.THRESHOLD}")
     if repeater.config.DISABLED_DTMF_COMMANDS:
         logger.info(f"  Disabled DTMF Commands: {', '.join(sorted(repeater.config.DISABLED_DTMF_COMMANDS))}")
+    elif not repeater.config.ENABLE_DTMF:
+        logger.info(f"  DTMF Commands: All disabled")
     else:
         logger.info(f"  DTMF Commands: All enabled")
     
