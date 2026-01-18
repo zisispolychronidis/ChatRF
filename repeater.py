@@ -1349,7 +1349,6 @@ class HamRepeater:
                             # Only play roger beep if enabled and AI mode is not about to start
                             if self.config.ENABLE_ROGER_BEEP and not (self.play_ai_mode and not self.ai_mode_running):
                                 self.play_tone()  # Roger beep
-                                self.module_manager.trigger_event("on_silence")
                             
                             # Menu playback
                             if self.play_menu:
@@ -1559,6 +1558,10 @@ class HamRepeater:
                             
                             was_talking = False
                             self.talking = False
+
+                            # Trigger on_silence event
+                            self.module_manager.trigger_event("on_silence")
+                            
                             silent_time = 0
                             
                             # Check if AI mode should start
@@ -1737,3 +1740,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
