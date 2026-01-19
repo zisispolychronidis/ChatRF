@@ -962,7 +962,7 @@ class HamRepeater:
                     data = [
                         (
                             row["CALLSIGN"].strip().upper(),
-                            row["NAME"].strip(),
+                            row["FIRST_NAME"].strip(),
                             row["CITY"].strip(),
                             row["COUNTRY"].strip()
                         )
@@ -1740,4 +1740,5 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
 
