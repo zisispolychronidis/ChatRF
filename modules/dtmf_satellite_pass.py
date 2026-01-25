@@ -6,6 +6,7 @@ This module announces upcoming satellite passes when DTMF command '6' is pressed
 
 from datetime import datetime, timedelta
 import pytz
+import re
 from pytz import timezone, utc
 from skyfield.api import EarthSatellite, Topos, load, Loader
 from modules.base import DTMFModule
@@ -152,11 +153,12 @@ class SatellitePassModule(DTMFModule):
                 spoken_parts = []
 
                 for name, dt in passes[:3]:
+                    clean_name = re.sub(r'\([^)]*\)', '', name)
                     hour = dt.hour % 12
                     minute = dt.minute
                     hour_str = self.config.GREEK_HOUR_NAMES.get(hour, str(hour))
                     minute_str = f"{minute:02d}"
-                    spoken_parts.append(f"{name}: {hour_str} και {minute_str}")
+                    spoken_parts.append(f"{clean_name}: {hour_str} και {minute_str}")
 
                 spoken = "Οι επόμενες διελεύσεις είναι: " + ", ".join(spoken_parts) + " ώρα Ελλάδος."
 
