@@ -51,7 +51,7 @@ class SatellitePassModule(DTMFModule):
             local_tz = pytz.timezone(self.config.TIMEZONE)
             ts = load.timescale()
             now = ts.now()
-            t_end = ts.utc((datetime.now(timezone.utc) + timedelta(hours=24)).replace(tzinfo=utc))
+            t_end = ts.utc((datetime.now(utc) + timedelta(hours=24)))
 
             # Fetch TLEs
             tle_text = self.repeater.fetch_tles()
