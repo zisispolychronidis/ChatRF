@@ -42,6 +42,8 @@ class SatellitePassModule(DTMFModule):
     
     def play_satellite_pass(self):
         """Calculate and announce satellite passes"""
+        self.repeater.speak_with_piper("Αναζήτηση δορυφορικών διελεύσεων.")
+
         try:
             # Observer position
             observer = Topos(
@@ -157,8 +159,13 @@ class SatellitePassModule(DTMFModule):
                     hour = dt.hour % 12
                     minute = dt.minute
                     hour_str = self.config.GREEK_HOUR_NAMES.get(hour, str(hour))
-                    minute_str = f"{minute:02d}"
-                    spoken_parts.append(f"{clean_name}: {hour_str} και {minute_str}")
+                    minute_str = f"{minute}" if minute != 0 else "ακριβώς"
+                    if minute != 0:
+                        time_phrase = f"{hour_str} και {minute_str}"
+                    else:
+                        time_phrase = f"{hour_str} ακριβώς"
+                    
+                    spoken_parts.append(f"{clean_name}: {time_phrase}")
 
                 spoken = "Οι επόμενες διελεύσεις είναι: " + ", ".join(spoken_parts) + " ώρα Ελλάδος."
 
