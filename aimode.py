@@ -570,71 +570,88 @@ class HamRadioAI:
         speaking_started = False
         last_audio_time = time.time()
         
+        # IMPORTANT: Record in mono
+        input_channels = 1
+        
         try:
-            with self.audio_stream() as stream:
-                logger.info("Waiting for speech...")
-                
-                while True:
-                    # Check for cancellation
-                    if self._check_cancel_flag():
-                        logger.info("AI mode cancelled by user")
-                        return None
-                    
-                    # Check for timeout
-                    if time.time() - last_audio_time > timeout:
-                        logger.info("Recording timeout reached")
-                        return None
-                    
-                    # Read audio data
-                    try:
-                        data = stream.read(self.config.CHUNK, exception_on_overflow=False)
-                        audio_np = np.frombuffer(data, dtype=np.int16)
-                        
-                        # Process channels
-                        audio_np, _ = self._process_audio_channels(audio_np)
-                    except Exception as e:
-                        logger.error(f"Error reading audio data: {e}")
-                        continue
-                    
-                    # Check audio level
-                    if np.max(np.abs(audio_np)) < self.config.THRESHOLD:
-                        silent_chunks += 1
-                        if not speaking_started:
-                            frames.clear()  # Clear buffer if we haven't started speaking
-                    else:
-                        # Audio detected
-                        speaking_started = True
-                        silent_chunks = 0
-                        frames.append(data)
-                        last_audio_time = time.time()
-                    
-                    # Check if we should stop recording
-                    if speaking_started and silent_chunks > silence_limit:
-                        logger.info("Speech ended, stopping recording")
-                        break
-                
-                # Save recorded audio
-                if frames:
-                    return self._save_audio_frames(frames)
-                else:
-                    logger.warning("No audio frames recorded")
+            # Open stream directly
+            stream = self.pyaudio_instance.open(
+                format=self.config.FORMAT,
+                channels=input_channels,  # Use 1 channel
+                rate=self.config.RATE,
+                input=True,
+                frames_per_buffer=self.config.CHUNK
+            )
+            
+            logger.info("Waiting for speech...")
+            
+            while True:
+                # Check for cancellation
+                if self._check_cancel_flag():
+                    logger.info("AI mode cancelled by user")
+                    stream.stop_stream()
+                    stream.close()
                     return None
+                
+                # Check for timeout
+                if time.time() - last_audio_time > timeout:
+                    logger.info("Recording timeout reached")
+                    stream.stop_stream()
+                    stream.close()
+                    return None
+                
+                # Read audio data
+                try:
+                    data = stream.read(self.config.CHUNK, exception_on_overflow=False)
+                    audio_np = np.frombuffer(data, dtype=np.int16)
                     
+                except Exception as e:
+                    logger.error(f"Error reading audio data: {e}")
+                    continue
+                
+                # Check audio level
+                if np.max(np.abs(audio_np)) < self.config.THRESHOLD:
+                    silent_chunks += 1
+                    if not speaking_started:
+                        frames.clear()  # Clear buffer if we haven't started speaking
+                else:
+                    # Audio detected
+                    speaking_started = True
+                    silent_chunks = 0
+                    frames.append(data)
+                    last_audio_time = time.time()
+                
+                # Check if we should stop recording
+                if speaking_started and silent_chunks > silence_limit:
+                    logger.info("Speech ended, stopping recording")
+                    break
+            
+            # Stop and close stream
+            stream.stop_stream()
+            stream.close()
+            
+            # Save recorded audio
+            if frames:
+                return self._save_audio_frames(frames, channels=1)  # Pass channels parameter
+            else:
+                logger.warning("No audio frames recorded")
+                return None
+                
         except Exception as e:
             logger.error(f"Error during audio recording: {e}")
+            # Ensure stream is closed on error
+            try:
+                stream.stop_stream()
+                stream.close()
+            except:
+                pass
             return None
-    
-    def _save_audio_frames(self, frames):
+
+    def _save_audio_frames(self, frames, channels=1):
         """Save audio frames to WAV file"""
         try:
-            # Determine output channels based on input_channel setting
-            if self.config.CHANNELS == 2 and self.config.INPUT_CHANNEL in ['left', 'right', 'mono']:
-                output_channels = 1
-            else:
-                output_channels = self.config.CHANNELS
-            
             with wave.open(self.config.OUTPUT_FILE, 'wb') as wf:
-                wf.setnchannels(output_channels)
+                wf.setnchannels(channels)  # Use the passed channels parameter
                 wf.setsampwidth(self.pyaudio_instance.get_sample_size(self.config.FORMAT))
                 wf.setframerate(self.config.RATE)
                 wf.writeframes(b''.join(frames))
