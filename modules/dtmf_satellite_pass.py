@@ -152,6 +152,8 @@ class SatellitePassModule(DTMFModule):
             else:
                 # Sort and limit
                 passes.sort(key=lambda x: x[1])
+                passes = list(dict.fromkeys(passes))
+                        
                 spoken_parts = []
 
                 for name, dt in passes[:3]:
