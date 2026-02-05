@@ -9,12 +9,22 @@ import logging
 import threading
 import json
 import configparser
+import re
+import platform
+import threading
+import requests
+from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timedelta
 from faster_whisper import WhisperModel
 from contextlib import contextmanager
 from piper import PiperVoice
+# Detect platform
+IS_UNIX = platform.system() != 'Windows'
+
+if IS_UNIX:
+    import signal
 
 # ANSI colors
 LOG_COLORS = {
@@ -35,6 +45,9 @@ class ColorFormatter(logging.Formatter):
             record.levelname = colored_level
         return super().format(record)
 
+class TimeoutError(Exception):
+    """Custom exception for timeouts"""
+    pass
 
 def setup_logging():
     os.makedirs("logs", exist_ok=True)
@@ -87,6 +100,66 @@ def setup_logging():
 
 logger = setup_logging()
 
+def call_with_timeout(func, args=(), kwargs=None, timeout=45):
+    """
+    Call a function with a timeout (cross-platform).
+    Uses signal on Unix/Linux, threading on Windows.
+    
+    Args:
+        func: Function to call
+        args: Tuple of positional arguments
+        kwargs: Dict of keyword arguments
+        timeout: Timeout in seconds
+        
+    Returns:
+        Function result or raises TimeoutError
+    """
+    if kwargs is None:
+        kwargs = {}
+    
+    if IS_UNIX:
+        # Unix: Signal-based timeout
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Operation timed out after {timeout} seconds")
+        
+        # Set the signal handler and alarm
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+        
+        try:
+            result = func(*args, **kwargs)
+            signal.alarm(0)  # Cancel alarm
+            return result
+        except TimeoutError:
+            raise
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    
+    else:
+        # Windows: Threading-based timeout
+        result = [None]
+        exception = [None]
+        
+        def target():
+            try:
+                result[0] = func(*args, **kwargs)
+            except Exception as e:
+                exception[0] = e
+        
+        thread = threading.Thread(target=target)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout)
+        
+        if thread.is_alive():
+            raise TimeoutError(f"Operation timed out after {timeout} seconds")
+        
+        if exception[0]:
+            raise exception[0]
+        
+        return result[0]
+
 class AIConfig:
     """Configuration class for AI mode settings"""
     def __init__(self, config_file='config/settings/aimode_config.ini'):
@@ -119,10 +192,20 @@ class AIConfig:
         self.WHISPER_MODEL_SIZE = self.config.get('AI', 'whisper_model_size', fallback='small')
         self.OLLAMA_MODEL_NAME = self.config.get('AI', 'ollama_model', fallback='gemma3')
         self.TEMPERATURE = self.config.getfloat('AI', 'temperature', fallback=0.2)
+        self.AUTO_ADJUST_TIMEOUT = self.config.getboolean('AI', 'auto_adjust_timeout', fallback=True)
+        self.PRELOAD_MODEL = self.config.getboolean('AI', 'preload_model', fallback=False)
+
+        # Ollama Server Settings
+        self.OLLAMA_HOST = self.config.get('AI', 'ollama_host', fallback='localhost')
+        self.OLLAMA_PORT = self.config.getint('AI', 'ollama_port', fallback=11434)
+        self.OLLAMA_USE_HTTPS = self.config.getboolean('AI', 'ollama_use_https', fallback=False)
+        self.OLLAMA_API_KEY = self.config.get('AI', 'ollama_api_key', fallback='')  # For future auth support
         
         # Timing Settings
         self.DEFAULT_TIMEOUT = self.config.getint('Timing', 'default_timeout', fallback=60)
         self.SILENCE_LIMIT_SECONDS = self.config.getint('Timing', 'silence_limit_seconds', fallback=2)
+        self.LLM_TIMEOUT = self.config.getint('Timing', 'llm_timeout', fallback=45)
+        self.LLM_CONNECT_TIMEOUT = self.config.getint('Timing', 'llm_connect_timeout', fallback=10)
         
         # Context Settings
         self.MAX_CONTEXT_MESSAGES = self.config.getint('Context', 'max_context_messages', fallback=20)
@@ -160,12 +243,20 @@ class AIConfig:
         default_config['AI'] = {
             'whisper_model_size': 'small',
             'ollama_model': 'gemma3',
-            'temperature': '0.2'
+            'temperature': '0.2',
+            'ollama_host': 'localhost',
+            'ollama_port': '11434',
+            'ollama_use_https': 'false',
+            'ollama_api_key': '',
+            'auto_adjust_timeout': 'true',
+            'preload_model': 'false'
         }
         
         default_config['Timing'] = {
             'default_timeout': '60',
-            'silence_limit_seconds': '2'
+            'silence_limit_seconds': '2',
+            'llm_timeout': '45',
+            'llm_connect_timeout': '10'
         }
         
         default_config['Context'] = {
@@ -188,6 +279,11 @@ class AIConfig:
         
         logger.info(f"Created default config file: {config_file}")
     
+    def get_ollama_base_url(self):
+        """Build the Ollama API base URL from configuration"""
+        protocol = 'https' if self.OLLAMA_USE_HTTPS else 'http'
+        return f"{protocol}://{self.OLLAMA_HOST}:{self.OLLAMA_PORT}"
+
     def load_system_prompt(self):
         """Load system prompt from file"""
         try:
@@ -199,6 +295,322 @@ class AIConfig:
         except Exception as e:
             logger.error(f"Error loading system prompt: {e}")
             return "Είσαι ένας AI βοηθός ενσωματωμένος σε έναν ραδιοερασιτεχνικό σταθμό (ham radio) που βρίσκεται στις Σέρρες, Ελλάδα. Ο κύριος ρόλος σου είναι να βοηθάς τους ραδιοερασιτέχνες απαντώντας σε ερωτήσεις."
+
+class OllamaClient:
+    """
+    Enhanced client for communicating with Ollama servers
+    - Handles connection, timeout, retries, and error handling
+    - Detects if model needs to be loaded and adjusts timeout
+    - Caches model loading status for performance
+    """
+    
+    def __init__(self, config):
+        self.config = config
+        self.base_url = config.get_ollama_base_url()
+        self.session = requests.Session()
+        
+        # Cache for loaded model status
+        self.loaded_models_cache = set()
+        self.last_model_check = {}
+        
+        # Set default headers
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'User-Agent': 'ChatRF/1.0'
+        })
+        
+        # Add API key if configured
+        if config.OLLAMA_API_KEY:
+            self.session.headers.update({
+                'Authorization': f'Bearer {config.OLLAMA_API_KEY}'
+            })
+    
+    def test_connection(self):
+        """Test if Ollama server is accessible"""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/tags",
+                timeout=self.config.LLM_CONNECT_TIMEOUT
+            )
+            response.raise_for_status()
+            logger.info(f"✓ Connected to Ollama server at {self.base_url}")
+            return True
+        except requests.ConnectionError:
+            logger.error(f"✗ Cannot connect to Ollama server at {self.base_url}")
+            return False
+        except requests.Timeout:
+            logger.error(f"✗ Connection timeout to Ollama server at {self.base_url}")
+            return False
+        except Exception as e:
+            logger.error(f"✗ Error testing Ollama connection: {e}")
+            return False
+    
+    def normalize_model_name(self, model_name):
+        # If model name doesn't have a tag, add :latest
+        if ':' not in model_name:
+            return f"{model_name}:latest"
+        return model_name
+
+    def list_models(self):
+        """List available models on the server"""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/tags",
+                timeout=self.config.LLM_CONNECT_TIMEOUT
+            )
+            response.raise_for_status()
+            data = response.json()
+            models = [model['name'] for model in data.get('models', [])]
+            return models
+        except Exception as e:
+            logger.error(f"Error listing models: {e}")
+            return []
+    
+    def get_running_models(self):
+        """
+        Get list of currently loaded/running models
+        
+        Returns:
+            dict: Dictionary mapping model names to their info
+        """
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/ps",
+                timeout=self.config.LLM_CONNECT_TIMEOUT
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse running models
+            running = {}
+            for model_info in data.get('models', []):
+                model_name = model_info.get('name', '')
+                running[model_name] = {
+                    'size': model_info.get('size', 0),
+                    'size_vram': model_info.get('size_vram', 0),
+                    'expires_at': model_info.get('expires_at', ''),
+                }
+            
+            return running
+            
+        except Exception as e:
+            logger.warning(f"Could not get running models: {e}")
+            return {}
+    
+    def is_model_loaded(self, model_name):
+        """
+        Check if a specific model is currently loaded in memory
+        
+        Args:
+            model_name: Name of the model to check
+            
+        Returns:
+            bool: True if model is loaded, False otherwise
+        """
+        try:
+            # Normalize the model name first
+            normalized_name = self.normalize_model_name(model_name)
+            
+            # Check cache first (valid for 30 seconds)
+            cache_key = normalized_name
+            if cache_key in self.last_model_check:
+                last_check_time = self.last_model_check[cache_key]
+                if time.time() - last_check_time < 30:
+                    return normalized_name in self.loaded_models_cache
+            
+            # Query server for running models
+            running_models = self.get_running_models()
+            
+            # Update cache
+            self.loaded_models_cache = set(running_models.keys())
+            self.last_model_check[cache_key] = time.time()
+            
+            is_loaded = normalized_name in running_models
+            
+            if is_loaded:
+                logger.info(f"✓ Model '{normalized_name}' is already loaded in memory")
+            else:
+                logger.info(f"⚠ Model '{normalized_name}' needs to be loaded (will take extra time)")
+            
+            return is_loaded
+            
+        except Exception as e:
+            logger.warning(f"Could not check if model is loaded: {e}")
+            # Assume not loaded to be safe (use longer timeout)
+            return False
+    
+    def estimate_model_load_time(self, model_name):
+        """
+        Estimate how long it will take to load a model
+        
+        Args:
+            model_name: Name of the model
+            
+        Returns:
+            int: Estimated load time in seconds
+        """
+        # Get model info to estimate size
+        try:
+            # Try to get model details
+            models = self.list_models()
+            
+            # Simple heuristic based on model name
+            model_lower = model_name.lower()
+            
+            if any(size in model_lower for size in ['120b', '70b', '65b', '72b']):
+                return 120  # Large models: 2 minutes
+            elif any(size in model_lower for size in ['30b', '34b']):
+                return 90   # Medium-large: 1.5 minutes
+            elif any(size in model_lower for size in ['13b', '14b']):
+                return 60   # Medium: 1 minute
+            elif any(size in model_lower for size in ['7b', '8b']):
+                return 45   # Small-medium: 45 seconds
+            elif any(size in model_lower for size in ['3b', '2b', '1b']):
+                return 30   # Small: 30 seconds
+            else:
+                return 60   # Default: 1 minute
+                
+        except Exception as e:
+            logger.warning(f"Could not estimate load time: {e}")
+            return 60  # Default to 1 minute
+    
+    def get_dynamic_timeout(self, model_name):
+        """
+        Calculate appropriate timeout based on whether model is loaded
+        
+        Args:
+            model_name: Name of the model to use
+            
+        Returns:
+            int: Timeout in seconds
+        """
+        base_timeout = self.config.LLM_TIMEOUT
+        
+        if self.is_model_loaded(model_name):
+            # Model is loaded, use normal timeout
+            logger.debug(f"Using normal timeout: {base_timeout}s")
+            return base_timeout
+        else:
+            # Model needs loading, add load time to timeout
+            load_time = self.estimate_model_load_time(model_name)
+            total_timeout = base_timeout + load_time
+            logger.info(f"Model needs loading - using extended timeout: {total_timeout}s (base: {base_timeout}s + load: {load_time}s)")
+            return total_timeout
+    
+    def chat(self, messages, stream=False, auto_adjust_timeout=True):
+        """
+        Send a chat request to Ollama
+        
+        Args:
+            messages: List of message dicts
+            stream: Whether to stream the response
+            auto_adjust_timeout: Automatically adjust timeout for model loading
+            
+        Returns:
+            Response dict or generator if streaming
+            
+        Raises:
+            requests.Timeout: If request times out
+            requests.RequestException: For other request errors
+        """
+        try:
+            payload = {
+                'model': self.config.OLLAMA_MODEL_NAME,
+                'messages': messages,
+                'options': {
+                    'temperature': self.config.TEMPERATURE
+                },
+                'stream': stream
+            }
+            
+            # Determine timeout
+            if auto_adjust_timeout:
+                read_timeout = self.get_dynamic_timeout(self.config.OLLAMA_MODEL_NAME)
+            else:
+                read_timeout = self.config.LLM_TIMEOUT
+            
+            # Use tuple for timeout: (connect_timeout, read_timeout)
+            timeout = (self.config.LLM_CONNECT_TIMEOUT, read_timeout)
+            
+            logger.debug(f"Sending chat request (timeout: {timeout})")
+            
+            response = self.session.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+                timeout=timeout,
+                stream=stream
+            )
+            response.raise_for_status()
+            
+            if stream:
+                return self._stream_response(response)
+            else:
+                # Update cache, model is now definitely loaded
+                normalized_name = self.normalize_model_name(self.config.OLLAMA_MODEL_NAME)
+                self.loaded_models_cache.add(normalized_name)
+                self.last_model_check[normalized_name] = time.time()
+                
+                return response.json()
+                
+        except requests.Timeout:
+            logger.error(f"Ollama request timed out (connect: {self.config.LLM_CONNECT_TIMEOUT}s, read: {read_timeout}s)")
+            raise
+        except requests.ConnectionError as e:
+            logger.error(f"Connection error to Ollama server: {e}")
+            raise
+        except requests.RequestException as e:
+            logger.error(f"Request error: {e}")
+            raise
+    
+    def _stream_response(self, response):
+        """Handle streaming response from Ollama"""
+        for line in response.iter_lines():
+            if line:
+                try:
+                    data = json.loads(line)
+                    yield data
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Error decoding streaming response: {e}")
+                    continue
+    
+    def preload_model(self, model_name=None):
+        """
+        Preload a model to avoid delay on first request
+        
+        Args:
+            model_name: Name of model to preload (uses config model if not specified)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if model_name is None:
+            model_name = self.config.OLLAMA_MODEL_NAME
+        
+        try:
+            logger.info(f"Preloading model '{model_name}'...")
+            
+            # Send a simple request to trigger model loading
+            response = self.session.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    'model': model_name,
+                    'messages': [{'role': 'user', 'content': 'test'}],
+                    'stream': False
+                },
+                timeout=(self.config.LLM_CONNECT_TIMEOUT, 180)  # 3 minutes for loading
+            )
+            response.raise_for_status()
+            
+            # Update cache
+            self.loaded_models_cache.add(model_name)
+            self.last_model_check[model_name] = time.time()
+            
+            logger.info(f"✓ Model '{model_name}' preloaded successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to preload model: {e}")
+            return False
 
 class ConversationContext:
     """Manages conversation context and history"""
@@ -455,7 +867,29 @@ class HamRadioAI:
         self._initialize_models()
         self.piper_voice = None
         self._load_piper_voice()
+        self.ollama_client = OllamaClient(self.config)
     
+        # Test connection on startup
+        if not self.ollama_client.test_connection():
+            logger.warning("⚠ Ollama server not accessible - AI will fail until server is available")
+        else:
+            # List available models
+            models = self.ollama_client.list_models()
+            logger.info("Available models:\n\t" + "\n\t".join(models))
+            if self.config.OLLAMA_MODEL_NAME not in models:
+                # Try with :latest suffix
+                normalized_name = self.ollama_client.normalize_model_name(self.config.OLLAMA_MODEL_NAME)
+                if normalized_name not in models:
+                    logger.warning(f"⚠ Model '{self.config.OLLAMA_MODEL_NAME}' not found on server")
+            
+            # Check if model is loaded
+            is_loaded = self.ollama_client.is_model_loaded(self.config.OLLAMA_MODEL_NAME)
+            
+            # Optionally preload model
+            if self.config.PRELOAD_MODEL and not is_loaded:
+                logger.info("Preloading model (this may take a minute)...")
+                self.ollama_client.preload_model()
+
     def _initialize_models(self):
         """Initialize AI models and audio system"""
         try:
@@ -697,15 +1131,13 @@ class HamRadioAI:
             pass
     
     def generate_response(self, prompt):
-        """Generate AI response using Ollama with conversation context"""
+        """Generate AI response with Ollama"""
         if not prompt or not prompt.strip():
             logger.warning("Empty prompt provided")
             return None
         
         try:
-            logger.info("Generating AI response...")
-            
-            # Typing sound should already be running from transcription
+            logger.info(f"Generating AI response... (server: {self.config.get_ollama_base_url()})")
             
             # Add user message to context
             self.context.add_message("user", prompt)
@@ -715,30 +1147,46 @@ class HamRadioAI:
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(self.context.get_messages_for_ai())
             
-            response = ollama.chat(
-                model=self.config.OLLAMA_MODEL_NAME,
-                messages=messages,
-                options={"temperature": self.config.TEMPERATURE}
-            )
+            # Call Ollama with automatic timeout adjustment
+            try:
+                response = self.ollama_client.chat(
+                    messages, 
+                    stream=False,
+                    auto_adjust_timeout=self.config.AUTO_ADJUST_TIMEOUT
+                )
+                ai_text = response['message']['content'].strip()
+                
+            except requests.Timeout:
+                timeout_used = self.ollama_client.get_dynamic_timeout(self.config.OLLAMA_MODEL_NAME)
+                logger.error(f"LLM request timed out after {timeout_used}s")
+                fallback_msg = "Συγγνώμη, μου πήρε πολύ χρόνο να απαντήσω. Παρακαλώ δοκιμάστε ξανά."
+                self.context.add_message("assistant", fallback_msg)
+                return fallback_msg
             
-            ai_text = response["message"]["content"].strip()
+            except requests.ConnectionError:
+                logger.error(f"Cannot connect to Ollama server at {self.config.get_ollama_base_url()}")
+                fallback_msg = "Συγγνώμη, δεν μπορώ να συνδεθώ με τον διακομιστή. Επικοινωνήστε με τον διαχειριστή."
+                self.context.add_message("assistant", fallback_msg)
+                return fallback_msg
+            
+            except requests.RequestException as e:
+                logger.error(f"Error communicating with Ollama: {e}")
+                fallback_msg = "Συγγνώμη, παρουσιάστηκε σφάλμα κατά την επικοινωνία με τον διακομιστή."
+                self.context.add_message("assistant", fallback_msg)
+                return fallback_msg
             
             if ai_text:
                 logger.info(f"AI Response: {ai_text}")
-                
-                # Add AI response to context
                 self.context.add_message("assistant", ai_text)
-                
                 return ai_text
             else:
                 logger.warning("Empty AI response")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error generating AI response: {e}")
+            logger.error(f"Unexpected error generating AI response: {e}")
             return None
         finally:
-            # Stop typing sound after AI response is generated
             self.typing_sound.stop()
             
     def play_audio(self, filename):
@@ -788,7 +1236,6 @@ class HamRadioAI:
             
     def _split_sentences(self, text):
         """Split text into sentences for better TTS flow"""
-        import re
         
         # Greek and English sentence endings
         sentence_endings = r'[.!?;]'
@@ -941,6 +1388,8 @@ class HamRadioAI:
             # Ensure typing sound is stopped
             self.typing_sound.stop()
             return True  # Continue session
+        else:
+            ai_response = re.sub(r"<think>.*?</think>", "", ai_response, flags=re.DOTALL).strip()
         
         # Speak the response (typing sound should already be stopped)
         time.sleep(0.5)
