@@ -1102,7 +1102,7 @@ class HamRadioAI:
         if not os.path.exists(audio_file):
             logger.error(f"Audio file {audio_file} not found")
             return None
-        
+
         try:
             logger.info("Transcribing audio...")
             
@@ -1113,6 +1113,10 @@ class HamRadioAI:
                 audio_file, 
                 language="el"  # Greek language
             )
+
+            if info.duration < 2.0:
+                logger.info(f"Audio ignored: duration is shorter than 2 seconds.")
+                return None
             
             result = " ".join([segment.text.strip() for segment in segments])
             
@@ -1236,24 +1240,41 @@ class HamRadioAI:
             
     def _split_sentences(self, text):
         """Split text into sentences for better TTS flow"""
-        
-        # Greek and English sentence endings
-        sentence_endings = r'[.!?;]'
-        
-        # Split on sentence endings but keep the punctuation
+        import re
+
+        sentence_endings = r'[.!?;]\s+'
         sentences = re.split(f'({sentence_endings})', text)
-        
-        # Recombine punctuation with sentences
+
         result = []
+        buffer = None  # holds a one-word sentence
+
         for i in range(0, len(sentences), 2):
             if i + 1 < len(sentences):
                 sentence = (sentences[i] + sentences[i + 1]).strip()
             else:
                 sentence = sentences[i].strip()
-            
-            if sentence:  # Only add non-empty sentences
-                result.append(sentence)
-        
+
+            if not sentence:
+                continue
+
+            word_count = len(sentence.split())
+
+            # If this is a one-word sentence, buffer it
+            if word_count == 1:
+                buffer = sentence
+                continue
+
+            # If we have a buffered one-word sentence, prepend it
+            if buffer:
+                sentence = f"{buffer} {sentence}"
+                buffer = None
+
+            result.append(sentence)
+
+        # If text ends with a one-word sentence, keep it
+        if buffer:
+            result.append(buffer)
+
         # Fallback: split very long texts at commas
         if len(result) <= 1 and len(text) > 150:
             parts = text.split(',')
@@ -1265,10 +1286,10 @@ class HamRadioAI:
                     current = part
                 else:
                     current += ("," if current else "") + part
-            
+
             if current.strip():
                 result.append(current.strip())
-        
+
         return result if result else [text]
         
     def speak_text(self, text):
