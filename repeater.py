@@ -173,7 +173,7 @@ class RepeaterConfig:
         self.TONE_FREQ = self.config.getint('CW', 'tone_freq', fallback=800)
         self.TONE_DURATION = self.config.getfloat('CW', 'tone_duration', fallback=0.2)
         self.TONE_VOLUME = self.config.getfloat('CW', 'tone_volume', fallback=1.0)
-        self.CALLSIGN = self.config.get('CW', 'callsign', fallback='SV2TMT')
+        self.CALLSIGN = self.config.get('CW', 'callsign', fallback='N0CALL')
         self.CW_WPM = self.config.getint('CW', 'wpm', fallback=20)
         farnsworth = self.config.get('CW', 'farnsworth_wpm', fallback='')
         self.CW_FARNSWORTH_WPM = int(farnsworth) if farnsworth.strip() else None
@@ -320,7 +320,7 @@ class RepeaterConfig:
             'tone_freq': '800',
             'tone_duration': '0.2',
             'tone_volume': '1.0',
-            'callsign': 'SV2TMT',
+            'callsign': 'N0CALL',
             'wpm': '20',
             'farnsworth_wpm': '',
             'id_interval': '600',
@@ -1756,3 +1756,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
