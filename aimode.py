@@ -232,6 +232,7 @@ class AIConfig:
             'rate': '44100',
             'chunk': '1024',
             'threshold': '500',
+            'min_talking': '0.2',
             'output_volume': '1.0',
             'input_device': '-1',
             'output_device': '-1'
@@ -1538,3 +1539,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
