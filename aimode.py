@@ -179,7 +179,10 @@ class AIConfig:
         self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
+        self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=0.2)
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
+        self.INPUT_DEVICE = self.config.getint('Audio', 'input_device', fallback=-1)
+        self.OUTPUT_DEVICE = self.config.getint('Audio', 'output_device', fallback=-1)
         
         # File paths
         self.OUTPUT_FILE = self.config.get('Paths', 'output_file', fallback='audio/temp/recorded_audio.wav')
@@ -229,7 +232,9 @@ class AIConfig:
             'rate': '44100',
             'chunk': '1024',
             'threshold': '500',
-            'output_volume': '1.0'
+            'output_volume': '1.0',
+            'input_device': '-1',
+            'output_device': '-1'
         }
         
         default_config['Paths'] = {
@@ -802,6 +807,7 @@ class TypingSound:
                 channels=1,
                 rate=44100,
                 output=True,
+                output_device_index=self.config.OUTPUT_DEVICE,
                 frames_per_buffer=1024
             )
             
@@ -949,6 +955,7 @@ class HamRadioAI:
                 channels=self.config.CHANNELS,
                 rate=self.config.RATE,
                 input=True,
+                input_device_index=self.config.INPUT_DEVICE,
                 frames_per_buffer=self.config.CHUNK
             )
             yield stream
@@ -1001,6 +1008,8 @@ class HamRadioAI:
         frames = []
         silent_chunks = 0
         silence_limit = int(self.config.SILENCE_LIMIT_SECONDS * self.config.RATE / self.config.CHUNK)
+        speech_chunks = 0
+        min_speech_chunks = int(self.config.MIN_TALKING * self.config.RATE / self.config.CHUNK)
         speaking_started = False
         last_audio_time = time.time()
         
@@ -1014,6 +1023,7 @@ class HamRadioAI:
                 channels=input_channels,  # Use 1 channel
                 rate=self.config.RATE,
                 input=True,
+                input_device_index=self.config.INPUT_DEVICE,
                 frames_per_buffer=self.config.CHUNK
             )
             
@@ -1046,14 +1056,22 @@ class HamRadioAI:
                 # Check audio level
                 if np.max(np.abs(audio_np)) < self.config.THRESHOLD:
                     silent_chunks += 1
+                    speech_chunks = 0
+
                     if not speaking_started:
-                        frames.clear()  # Clear buffer if we haven't started speaking
+                        frames.clear()
+
                 else:
-                    # Audio detected
-                    speaking_started = True
+                    speech_chunks += 1
                     silent_chunks = 0
-                    frames.append(data)
-                    last_audio_time = time.time()
+
+                    # Only start speaking after minimum duration
+                    if not speaking_started and speech_chunks >= min_speech_chunks:
+                        speaking_started = True
+
+                    if speaking_started:
+                        frames.append(data)
+                        last_audio_time = time.time()
                 
                 # Check if we should stop recording
                 if speaking_started and silent_chunks > silence_limit:
@@ -1204,7 +1222,8 @@ class HamRadioAI:
                     format=self.pyaudio_instance.get_format_from_width(wf.getsampwidth()),
                     channels=wf.getnchannels(),
                     rate=wf.getframerate(),
-                    output=True
+                    output=True,
+                    output_device_index=self.config.OUTPUT_DEVICE
                 )
                 
                 chunk_size = 1024
