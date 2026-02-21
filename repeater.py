@@ -129,7 +129,8 @@ class RepeaterConfig:
         self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
-        self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.5)
+        self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=500)
+        self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.2)
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
         self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
@@ -299,6 +300,7 @@ class RepeaterConfig:
             'rate': '44100',
             'chunk': '1024',
             'threshold': '500',
+            'min_talking': '0.2',
             'silence_time': '0.5',
             'audio_boost': '5.0',
             'output_volume': '1.0'
@@ -1291,6 +1293,8 @@ class HamRepeater:
 
         logger.info("Ham repeater running...")
         
+        start_talking = 0
+
         try:
             while True:
                 # Read audio input
@@ -1331,6 +1335,9 @@ class HamRepeater:
                 
                 # Check if audio is above threshold (someone talking)
                 if np.max(np.abs(audio_np)) > self.config.THRESHOLD:
+                    if start_talking == 0:
+                        start_talking = time.time()
+                    talking_time = time.time() - start_talking
                     if self.config.ENABLE_AUDIO_REPEAT:
                         # Recreate output stream if needed with correct channels
                         if self.output_stream is None or self.output_stream._channels != output_channels:
@@ -1343,14 +1350,16 @@ class HamRepeater:
                                 output=True
                             )
                         self.output_stream.write(boosted_data)
-                    silent_time = 0
-                    was_talking = True
-                    self.talking = True
+                    if talking_time >= self.config.MIN_TALKING:
+                        silent_time = 0
+                        was_talking = True
+                        self.talking = True
 
-                    # Trigger on_transmission_start event
-                    self.module_manager.trigger_event("on_transmission_start")
+                        # Trigger on_transmission_start event
+                        self.module_manager.trigger_event("on_transmission_start")
                 else:
                     # Handle silence after talking
+                    start_talking = 0
                     if was_talking:
                         if silent_time == 0:
                             start_silent = time.time()
@@ -1756,4 +1765,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-
