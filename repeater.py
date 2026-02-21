@@ -134,6 +134,8 @@ class RepeaterConfig:
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
         self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
+        self.INPUT_DEVICE = self.config.getint('Audio', 'input_device', fallback=-1)
+        self.OUTPUT_DEVICE = self.config.getint('Audio', 'output_device', fallback=-1)
         
         # Feature flags from arguments
         self.ENABLE_AUDIO_REPEAT = not (args and args.no_audio_repeat)
@@ -303,7 +305,9 @@ class RepeaterConfig:
             'min_talking': '0.2',
             'silence_time': '0.5',
             'audio_boost': '5.0',
-            'output_volume': '1.0'
+            'output_volume': '1.0',
+            'input_device': '-1',
+            'output_device': '-1'
         }
         
         default_config['Paths'] = {
@@ -425,6 +429,7 @@ class HamRepeater:
                 channels=self.config.CHANNELS,
                 rate=self.config.RATE,
                 input=True,
+                input_device_index=self.config.INPUT_DEVICE,
                 frames_per_buffer=self.config.CHUNK
             )
             
@@ -478,7 +483,8 @@ class HamRepeater:
                         format=self.p.get_format_from_width(wf.getsampwidth()),
                         channels=wf.getnchannels(),
                         rate=wf.getframerate(),
-                        output=True
+                        output=True,
+                        output_device_index=self.config.OUTPUT_DEVICE
                     )
                     
                     data = wf.readframes(self.config.CHUNK)
@@ -585,6 +591,7 @@ class HamRepeater:
                 channels=1,
                 rate=self.config.RATE,
                 output=True,
+                output_device_index=self.config.OUTPUT_DEVICE,
                 frames_per_buffer=chunk_size
             )
             
@@ -687,6 +694,7 @@ class HamRepeater:
                     channels=1,
                     rate=rate,
                     output=True,
+                    output_device_index=self.config.OUTPUT_DEVICE,
                     frames_per_buffer=1024
                 )
                 
@@ -1190,6 +1198,7 @@ class HamRepeater:
                 channels=1,
                 rate=self.config.RATE,
                 input=True,
+                input_device_index=self.config.INPUT_DEVICE,
                 frames_per_buffer=self.config.CHUNK
             )
             logger.info("Recording callsign...")
@@ -1347,7 +1356,8 @@ class HamRepeater:
                                 format=self.config.FORMAT,
                                 channels=output_channels,
                                 rate=self.config.RATE,
-                                output=True
+                                output=True,
+                                output_device_index=self.config.OUTPUT_DEVICE
                             )
                         self.output_stream.write(boosted_data)
                     if talking_time >= self.config.MIN_TALKING:
