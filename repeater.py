@@ -129,8 +129,8 @@ class RepeaterConfig:
         self.RATE = self.config.getint('Audio', 'rate', fallback=44100)
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
-        self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=500)
-        self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.2)
+        self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=0.2)
+        self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.5)
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
         self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
@@ -1775,3 +1775,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
