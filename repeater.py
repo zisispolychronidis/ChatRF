@@ -217,7 +217,7 @@ class RepeaterConfig:
         }
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_temp.wav')
         
         # Weather config
@@ -334,7 +334,7 @@ class RepeaterConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-low.onnx',
+            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
             'temp_audio': 'audio/temp/piper_temp.wav'
         }
         
@@ -1775,4 +1775,5 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
 
