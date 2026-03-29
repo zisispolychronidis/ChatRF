@@ -121,7 +121,7 @@ class RepeaterConfig:
             logger.warning(f"Config file {config_file} not found! Creating default config...")
             self._create_default_config(config_file)
         
-        self.config.read(config_file)
+        self.config.read(config_file, encoding='utf-8')
         
         # Audio Settings
         self.FORMAT = pyaudio.paInt16
