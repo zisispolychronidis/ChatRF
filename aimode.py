@@ -215,7 +215,7 @@ class AIConfig:
         self.CONTEXT_TIMEOUT_MINUTES = self.config.getint('Context', 'context_timeout_minutes', fallback=30)
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_ai_temp.wav')
         
         # Thinking Sound Settings
@@ -271,7 +271,7 @@ class AIConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
+            'model_path': 'models/el_GR-rapunzelina-low.onnx',
             'temp_audio': 'audio/temp/piper_ai_temp.wav'
         }
         
@@ -643,12 +643,13 @@ class ConversationContext:
                     # Check if context has expired
                     if self._is_context_expired():
                         logger.info("Context expired, starting fresh conversation")
+                        f.close() # Close file before deleting
                         self.clear_context()
+                        f = open(self.config.CONTEXT_FILE, 'r', encoding='utf-8') # Open file again
                     else:
                         logger.info(f"Loaded {len(self.messages)} messages from context")
         except Exception as e:
             logger.error(f"Error loading context: {e}")
-            self.clear_context()
     
     def save_context(self):
         """Save conversation context to file"""
@@ -1539,5 +1540,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
