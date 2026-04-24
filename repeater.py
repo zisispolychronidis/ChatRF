@@ -1347,10 +1347,6 @@ class HamRepeater:
                     if start_talking == 0:
                         start_talking = time.time()
                     talking_time = time.time() - start_talking
-                    # Share raw audio chunks with modules
-                    if not hasattr(self, 'shared_data'):
-                        self.shared_data = {}
-                    self.shared_data.setdefault('audio_buffer', []).append(data)
                     if self.config.ENABLE_AUDIO_REPEAT:
                         # Recreate output stream if needed with correct channels
                         if self.output_stream is None or self.output_stream._channels != output_channels:
@@ -1366,11 +1362,15 @@ class HamRepeater:
                         self.output_stream.write(boosted_data)
                     if talking_time >= self.config.MIN_TALKING:
                         silent_time = 0
+                        # Share raw audio chunks with modules
+                        if not hasattr(self, 'shared_data'):
+                            self.shared_data = {}
+                        self.shared_data.setdefault('audio_buffer', []).append(data)
+                        if not was_talking:
+                            # Trigger on_transmission_start event
+                            self.module_manager.trigger_event("on_transmission_start")
                         was_talking = True
                         self.talking = True
-
-                        # Trigger on_transmission_start event
-                        self.module_manager.trigger_event("on_transmission_start")
                 else:
                     # Handle silence after talking
                     start_talking = 0
