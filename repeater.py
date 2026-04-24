@@ -217,7 +217,7 @@ class RepeaterConfig:
         }
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_temp.wav')
         
         # Weather config
@@ -334,7 +334,7 @@ class RepeaterConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
+            'model_path': 'models/el_GR-rapunzelina-low.onnx',
             'temp_audio': 'audio/temp/piper_temp.wav'
         }
         
@@ -739,7 +739,7 @@ class HamRepeater:
                 logger.info(f"Piper voice loaded: {self.config.PIPER_MODEL_PATH}")
             else:
                 logger.warning(f"Piper model not found: {self.config.PIPER_MODEL_PATH}")
-                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-medium' and put it in models/")
+                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-low' and put it in models/")
         except Exception as e:
             logger.error(f"Failed to load Piper voice: {e}")
             self.piper_voice = None
@@ -1347,6 +1347,10 @@ class HamRepeater:
                     if start_talking == 0:
                         start_talking = time.time()
                     talking_time = time.time() - start_talking
+                    # Share raw audio chunks with modules
+                    if not hasattr(self, 'shared_data'):
+                        self.shared_data = {}
+                    self.shared_data.setdefault('audio_buffer', []).append(data)
                     if self.config.ENABLE_AUDIO_REPEAT:
                         # Recreate output stream if needed with correct channels
                         if self.output_stream is None or self.output_stream._channels != output_channels:
@@ -1775,5 +1779,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-
-
