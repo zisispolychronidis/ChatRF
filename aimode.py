@@ -745,55 +745,61 @@ class TypingSound:
     def _generate_tone(self, frequency, duration, sample_rate=44100, volume=None):
         """Generate a single tone with smooth fade in/out"""
         if volume is None:
-            volume = self.config.THINKING_SOUND_VOLUME * 0.15  # Scale down for individual tones
+            volume = self.config.THINKING_SOUND_VOLUME * 0.15 
         
         frames = int(duration * sample_rate)
-        arr = np.sin(2 * np.pi * frequency * np.linspace(0, duration, frames))
+        if frames <= 0: return np.array([], dtype=np.int16) # Safety check
+
+        t = np.linspace(0, duration, frames, endpoint=False)
+        arr = np.sin(2 * np.pi * frequency * t)
         
         # Smooth fade in/out to avoid clicks
-        fade_frames = int(0.02 * sample_rate)  # 20ms fade
+        fade_frames = min(int(0.02 * sample_rate), frames // 2) 
+        
         if fade_frames > 0:
-            arr[:fade_frames] *= np.linspace(0, 1, fade_frames)
-            arr[-fade_frames:] *= np.linspace(1, 0, fade_frames)
+            fade_in = np.linspace(0, 1, fade_frames)
+            fade_out = np.linspace(1, 0, fade_frames)
+            arr[:fade_frames] *= fade_in
+            arr[-fade_frames:] *= fade_out
         
         return (arr * volume * 32767).astype(np.int16)
     
     def _generate_melody(self, sample_rate=44100):
         """Generate a thinking melody"""
-        # A gentle, thoughtful arpeggio pattern in A minor
-        melody_notes = [
-            440.00,  # A4
-            523.25,  # C5
-            659.25,  # E5
-            523.25,  # C5
-            440.00,  # A4
-            329.63,  # E4
-            440.00,  # A4
-            523.25,  # C5
-        ]
-        
-        note_duration = 0.18  # Slightly faster, more fluid
-        melody_audio = np.array([], dtype=np.int16)
-        
-        for i, freq in enumerate(melody_notes):
-            # Gentle volume swell
-            volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
+        def _generate_melody(self, sample_rate=44100):
+            """Generate a thinking melody"""
+            melody_notes = [
+                (440.00, 0.18),  # A4
+                (523.25, 0.18),  # C5
+                (659.25, 0.30),  # E5
+                (523.25, 0.18),  # C5
+                (440.00, 0.18),  # A4
+                (329.63, 0.24),  # E4
+                (440.00, 0.18),  # A4
+                (523.25, 0.36),  # C5
+            ]
             
-            note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
-            melody_audio = np.concatenate([melody_audio, note])
+            melody_audio = np.array([], dtype=np.int16)
             
-            # Very short gap for smooth flow
-            if i < len(melody_notes) - 1:
-                gap_frames = int(0.03 * sample_rate)
-                gap = np.zeros(gap_frames, dtype=np.int16)
-                melody_audio = np.concatenate([melody_audio, gap])
-        
-        # Pause before loop
-        end_pause_frames = int(0.6 * sample_rate)
-        end_pause = np.zeros(end_pause_frames, dtype=np.int16)
-        melody_audio = np.concatenate([melody_audio, end_pause])
-        
-        return melody_audio
+            for i, (freq, note_duration) in enumerate(melody_notes):
+                # Gentle volume swell
+                volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
+                
+                note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
+                melody_audio = np.concatenate([melody_audio, note])
+                
+                # Very short gap for smooth flow
+                if i < len(melody_notes) - 1:
+                    gap_frames = int(0.03 * sample_rate)
+                    gap = np.zeros(gap_frames, dtype=np.int16)
+                    melody_audio = np.concatenate([melody_audio, gap])
+            
+            # Pause before loop
+            end_pause_frames = int(0.6 * sample_rate)
+            end_pause = np.zeros(end_pause_frames, dtype=np.int16)
+            melody_audio = np.concatenate([melody_audio, end_pause])
+            
+            return melody_audio
     
     def _typing_loop(self):
         """Background thread function for playing the thinking melody"""
