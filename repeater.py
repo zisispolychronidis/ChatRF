@@ -453,8 +453,13 @@ class HamRepeater:
             logger.error(f"Continuing without speech-to-text")
             self.whisper_model = None
     
-    def play_audio(self, filename):
-        """Play a WAV or MP3 file through the audio output"""
+    def play_audio(self, filename, max_duration=None):
+        """Play a WAV or MP3 file through the audio output
+        
+        Args:
+            filename: Path to the audio file (WAV or MP3)
+            max_duration: Maximum playback duration in seconds (None = play full file)
+        """
         try:
             # Clamp volume to valid range
             volume = max(0.0, min(5.0, self.config.OUTPUT_VOLUME))
@@ -468,6 +473,11 @@ class HamRepeater:
                 from pydub.playback import play
                 
                 audio = AudioSegment.from_mp3(filename)
+                
+                # Trim to max_duration if specified (pydub uses milliseconds)
+                if max_duration is not None:
+                    audio = audio[:int(max_duration * 1000)]
+                
                 # Convert 0-5 scale to dB: 1.0->0dB, 2.0->+6dB, 5.0->+14dB
                 if volume > 0:
                     volume_db = 20 * np.log10(volume)
@@ -487,14 +497,31 @@ class HamRepeater:
                         output_device_index=self.config.OUTPUT_DEVICE
                     )
                     
+                    framerate = wf.getframerate()
+                    # Calculate the max number of frames to read based on duration limit
+                    max_frames = int(max_duration * framerate) if max_duration is not None else None
+                    frames_played = 0
+                    
                     data = wf.readframes(self.config.CHUNK)
                     while data:
+                        # Enforce max_duration by trimming the last chunk if needed
+                        if max_frames is not None:
+                            remaining_frames = max_frames - frames_played
+                            if remaining_frames <= 0:
+                                break
+                            # If this chunk would exceed the limit, slice it
+                            if frames_played + self.config.CHUNK > max_frames:
+                                bytes_per_frame = wf.getsampwidth() * wf.getnchannels()
+                                data = data[:remaining_frames * bytes_per_frame]
+                        
                         # Convert bytes to numpy array for volume adjustment
                         audio_data = np.frombuffer(data, dtype=np.int16)
                         # Apply volume (with gain) and clip to prevent distortion
                         audio_data = np.clip(audio_data * volume, -32768, 32767).astype(np.int16)
                         # Write adjusted audio
                         audio_stream.write(audio_data.tobytes())
+                        
+                        frames_played += self.config.CHUNK
                         data = wf.readframes(self.config.CHUNK)
                     
                     audio_stream.close()
@@ -1136,6 +1163,11 @@ class HamRepeater:
                             logger.info(f"DTMF command {command_to_execute} is disabled, ignoring")
                             continue
 
+                        # Share last DTMF command with modules
+                        if not hasattr(self, 'shared_data'):
+                            self.shared_data = {}
+                        self.shared_data['last_dtmf'] = command_to_execute
+
                         # Try hardcoded commands first
                         handler = command_map.get(command_to_execute)
                         if handler:
@@ -1228,8 +1260,7 @@ class HamRepeater:
         """Speech To Text conversion with FasterWhisper"""
         try:
             segments, _ = self.whisper_model.transcribe(
-                filename, 
-                language="en"
+                filename
             )
             result = "".join([seg.text for seg in segments]).strip().upper()
             logger.info(f"Transcribed callsign input: {result}")
@@ -1406,7 +1437,7 @@ class HamRepeater:
                                     meme_files = [f for f in os.listdir(meme_folder) if f.lower().endswith(".wav") or f.lower().endswith(".mp3")]
                                     if meme_files:
                                         random_file = random.choice(meme_files)
-                                        self.play_audio(os.path.join(meme_folder, random_file))
+                                        self.play_audio(os.path.join(meme_folder, random_file), max_duration=10)
                                         logger.info(f"Played meme: {random_file}")
                                     else:
                                         logger.warning("No meme files found in memes/ folder")
