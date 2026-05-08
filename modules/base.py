@@ -102,6 +102,34 @@ class DTMFModule(BaseChatRFModule):
             bool: True if command can execute, False otherwise
         """
         return True
+    
+    def on_dtmf_context_input(self, digit):
+        """
+        Called when this module holds DTMF context and a digit is received.
+        Override this to handle sub-input during an active session.
+
+        Args:
+            digit (str): The DTMF digit received (e.g. '1', '#')
+        """
+        pass
+
+    def acquire_dtmf_context(self):
+        """
+        Acquire exclusive DTMF routing to this module.
+        While held, all DTMF tones call self.on_dtmf_context_input().
+        
+        Returns:
+            bool: True if successfully acquired
+        """
+        return self.repeater.module_manager.acquire_dtmf_context(self)
+
+    def release_dtmf_context(self):
+        """Release DTMF context back to normal command routing."""
+        self.repeater.module_manager.release_dtmf_context(self)
+
+    def has_dtmf_context(self):
+        """Returns True if this module currently owns DTMF input."""
+        return self.repeater.module_manager.has_dtmf_context(self)
 
 
 class PeriodicModule(BaseChatRFModule):
