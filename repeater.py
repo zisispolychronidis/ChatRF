@@ -1168,6 +1168,11 @@ class HamRepeater:
                             self.shared_data = {}
                         self.shared_data['last_dtmf'] = command_to_execute
 
+                        # Route commands to modules with DTMF context takeover
+                        if self.module_manager._dtmf_context_owner is not None:
+                            self.module_manager.handle_dtmf_command(command_to_execute)
+                            continue  # Skip normal command handling
+
                         # Try hardcoded commands first
                         handler = command_map.get(command_to_execute)
                         if handler:
