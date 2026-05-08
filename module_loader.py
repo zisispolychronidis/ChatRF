@@ -38,6 +38,8 @@ class ModuleManager:
         # Dynamic flags, each module gets its own flag
         self.module_flags = {}        # {flag_name: False}
         self.flag_to_module = {}      # {flag_name: module_instance}
+
+        self._dtmf_context_owner = None   # Module currently holding DTMF focus
         
     def load_all_modules(self, modules_dir="modules"):
         """
@@ -223,6 +225,16 @@ class ModuleManager:
         Returns:
             bool: True if command was handled, False if not found
         """
+        # If a module has acquired the DTMF context, route exclusively to it
+        if self._dtmf_context_owner is not None:
+            owner = self._dtmf_context_owner
+            try:
+                owner.on_dtmf_context_input(command)
+            except Exception as e:
+                logger.error(f"Error in DTMF context owner {owner.name}: {e}", exc_info=True)
+            return True
+
+        # Normal routing
         module = self.dtmf_modules.get(command)
         
         if not module:
@@ -303,6 +315,48 @@ class ModuleManager:
                     method(*args, **kwargs)
             except Exception as e:
                 logger.error(f"Error in event module {module.name}.{event_name}: {e}", exc_info=True)
+
+    def acquire_dtmf_context(self, module):
+        """
+        Let a module take over the DTMF input.
+        All commands will be routed to module.on_dtmf_context_input() until released.
+
+        Args:
+            module: The module instance requesting ownership
+            
+        Returns:
+            bool: True if acquired, False if another module already owns it
+        """
+        if self._dtmf_context_owner is not None:
+            logger.warning(
+                f"{module.name} tried to acquire DTMF context, "
+                f"but {self._dtmf_context_owner.name} already holds it"
+            )
+            return False
+        
+        self._dtmf_context_owner = module
+        logger.info(f"DTMF context acquired by: {module.name}")
+        return True
+
+    def release_dtmf_context(self, module):
+        """
+        Release DTMF ownership.
+        
+        Args:
+            module: The module releasing ownership (must be current owner)
+        """
+        if self._dtmf_context_owner is not module:
+            logger.warning(
+                f"{module.name} tried to release DTMF context but it isn't the owner"
+            )
+            return
+        
+        self._dtmf_context_owner = None
+        logger.info(f"DTMF context released by: {module.name}")
+
+    def has_dtmf_context(self, module):
+        """Check if a specific module currently owns the DTMF context."""
+        return self._dtmf_context_owner is module
     
     def shutdown_all(self):
         """Shutdown all modules gracefully"""
