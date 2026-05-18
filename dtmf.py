@@ -5,6 +5,10 @@ import pyaudio
 import wave
 import numpy as np
 import time
+import configparser
+
+config = configparser.ConfigParser()
+config.read('config/settings/config.ini', encoding='utf-8')
 
 DTMF_TABLE = {
     '1': [1209, 697], '2': [1336, 697], '3': [1477, 697], 'A': [1633, 697],
@@ -18,6 +22,7 @@ CHANNELS = 1
 RATE = 20000
 CHUNK = 1024
 RECORD_SECONDS = 0.4
+INPUT_DEVICE = config.getint('Audio', 'input_device', fallback=-1)
 
 class DTMFDetector:
     def __init__(self, debounce_time=1.0):
@@ -31,7 +36,7 @@ class DTMFDetector:
     def detect_dtmf(self):
         """Detects DTMF tones and returns the pressed key, or None if no key is detected or if debouncing."""
         audio = pyaudio.PyAudio()
-        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, input_device_index=INPUT_DEVICE, frames_per_buffer=CHUNK)
         frames = [stream.read(CHUNK) for _ in range(int(RATE / CHUNK * RECORD_SECONDS))]
         stream.stop_stream()
         stream.close()
@@ -67,7 +72,7 @@ class DTMFDetector:
                 self.last_detection_time = current_time
                 return char
 
-        # No tone detected - reset if enough time has passed
+        # No tone detected, reset if enough time has passed
         if (current_time - self.last_detection_time) > self.debounce_time:
             self.last_detected_key = None
             
