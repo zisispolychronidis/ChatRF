@@ -271,7 +271,7 @@ class AIConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-low.onnx',
+            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
             'temp_audio': 'audio/temp/piper_ai_temp.wav'
         }
         
@@ -766,40 +766,38 @@ class TypingSound:
     
     def _generate_melody(self, sample_rate=44100):
         """Generate a thinking melody"""
-        def _generate_melody(self, sample_rate=44100):
-            """Generate a thinking melody"""
-            melody_notes = [
-                (440.00, 0.18),  # A4
-                (523.25, 0.18),  # C5
-                (659.25, 0.30),  # E5
-                (523.25, 0.18),  # C5
-                (440.00, 0.18),  # A4
-                (329.63, 0.24),  # E4
-                (440.00, 0.18),  # A4
-                (523.25, 0.36),  # C5
-            ]
+        melody_notes = [
+            (440.00, 0.18),  # A4
+            (523.25, 0.18),  # C5
+            (659.25, 0.30),  # E5
+            (523.25, 0.18),  # C5
+            (440.00, 0.18),  # A4
+            (329.63, 0.24),  # E4
+            (440.00, 0.18),  # A4
+            (523.25, 0.36),  # C5
+        ]
+        
+        melody_audio = np.array([], dtype=np.int16)
+        
+        for i, (freq, note_duration) in enumerate(melody_notes):
+            # Gentle volume swell
+            volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
             
-            melody_audio = np.array([], dtype=np.int16)
+            note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
+            melody_audio = np.concatenate([melody_audio, note])
             
-            for i, (freq, note_duration) in enumerate(melody_notes):
-                # Gentle volume swell
-                volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
-                
-                note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
-                melody_audio = np.concatenate([melody_audio, note])
-                
-                # Very short gap for smooth flow
-                if i < len(melody_notes) - 1:
-                    gap_frames = int(0.03 * sample_rate)
-                    gap = np.zeros(gap_frames, dtype=np.int16)
-                    melody_audio = np.concatenate([melody_audio, gap])
-            
-            # Pause before loop
-            end_pause_frames = int(0.6 * sample_rate)
-            end_pause = np.zeros(end_pause_frames, dtype=np.int16)
-            melody_audio = np.concatenate([melody_audio, end_pause])
-            
-            return melody_audio
+            # Very short gap for smooth flow
+            if i < len(melody_notes) - 1:
+                gap_frames = int(0.03 * sample_rate)
+                gap = np.zeros(gap_frames, dtype=np.int16)
+                melody_audio = np.concatenate([melody_audio, gap])
+        
+        # Pause before loop
+        end_pause_frames = int(0.6 * sample_rate)
+        end_pause = np.zeros(end_pause_frames, dtype=np.int16)
+        melody_audio = np.concatenate([melody_audio, end_pause])
+        
+        return melody_audio
     
     def _typing_loop(self):
         """Background thread function for playing the thinking melody"""
