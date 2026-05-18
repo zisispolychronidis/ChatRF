@@ -334,7 +334,7 @@ class RepeaterConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-low.onnx',
+            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
             'temp_audio': 'audio/temp/piper_temp.wav'
         }
         
