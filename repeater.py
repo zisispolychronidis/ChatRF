@@ -334,7 +334,7 @@ class RepeaterConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
+            'model_path': 'models/el_GR-rapunzelina-low.onnx',
             'temp_audio': 'audio/temp/piper_temp.wav'
         }
         
@@ -396,8 +396,6 @@ class HamRepeater:
         self.play_info = False
         self.play_meme = False
         self.play_time = False
-        self.play_weather = False
-        self.play_band = False
         self.callsign_data = self.load_radioid_data()
         self.command_times = deque()
         self.command_lock = threading.Lock()
@@ -1100,8 +1098,6 @@ class HamRepeater:
             '#': lambda: self.command_schedule("play_menu", "Menu playback scheduled"),
             '0': lambda: self.command_schedule("play_info", "Repeater info playback scheduled"),          
             '1': lambda: self.command_schedule("play_time", "Time and date playback scheduled"),
-            '2': lambda: self.command_schedule("play_weather", "Weather playback scheduled"),
-            '3': lambda: self.command_schedule("play_band", "Band conditions playback scheduled"),
             '7': lambda: self.command_schedule("play_meme", "Random meme playback scheduled"),
         }
 
@@ -1442,7 +1438,7 @@ class HamRepeater:
                                     meme_files = [f for f in os.listdir(meme_folder) if f.lower().endswith(".wav") or f.lower().endswith(".mp3")]
                                     if meme_files:
                                         random_file = random.choice(meme_files)
-                                        self.play_audio(os.path.join(meme_folder, random_file), max_duration=10)
+                                        self.play_audio(os.path.join(meme_folder, random_file), max_duration=5)
                                         logger.info(f"Played meme: {random_file}")
                                     else:
                                         logger.warning("No meme files found in memes/ folder")
@@ -1498,135 +1494,6 @@ class HamRepeater:
                                     logger.error(f"Error during time and date playback: {e}")
                                 finally:
                                     self.play_time = False
-                                    
-                            # Weather playback
-                            if self.play_weather:
-                                try:
-                                    import requests, json
-                                    from datetime import datetime
-
-                                    city = self.config.WEATHER_CITY
-                                    api_key = self.config.OPENWEATHER_API_KEY
-                                    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric&lang=el"
-
-                                    cache_valid = False
-                                    forecast = ""
-
-                                    # Check cache
-                                    if os.path.exists(self.config.WEATHER_CACHE_FILE):
-                                        with open(self.config.WEATHER_CACHE_FILE, "r", encoding="utf-8") as f:
-                                            cache_data = json.load(f)
-                                            timestamp = cache_data.get("timestamp", 0)
-                                            if time.time() - timestamp < self.config.WEATHER_CACHE_DURATION:
-                                                forecast = cache_data.get("forecast", "")
-                                                cache_valid = True
-
-                                    # If no valid cache, fetch new data
-                                    if not cache_valid:
-                                        response = requests.get(url)
-                                        if response.status_code == 200:
-                                            data = response.json()
-                                            temp = round(data["main"]["temp"])
-                                            description = data["weather"][0]["description"]
-                                            humidity = data["main"]["humidity"]
-                                            windspeed = data["wind"]["speed"]
-                                            city = data["name"]
-                                            
-                                            # Convert m/s to beaufort
-                                            BEAUFORT_LIMITS = [0.5, 1.5, 3.3, 5.5, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6]
-                                            
-                                            beaufort = 0
-                                            for limit in BEAUFORT_LIMITS:
-                                                if windspeed <= limit:
-                                                    break
-                                                beaufort += 1  
-
-                                            # Construct forecast message
-                                            forecast = (
-                                                f"Ο καιρός στην περιοχή {city} είναι {description}, "
-                                                f"με θερμοκρασία {temp} βαθμούς Κελσίου, "
-                                                f"υγρασία {humidity} τοις εκατό, "
-                                                f"και ανέμους {beaufort} μποφόρ."
-                                            )
-
-                                            # Save to cache
-                                            with open(self.config.WEATHER_CACHE_FILE, "w", encoding="utf-8") as f:
-                                                json.dump({"forecast": forecast, "timestamp": time.time()}, f)
-                                        else:
-                                            logger.warning(f"Failed to fetch weather: {response.status_code}")
-                                            forecast = "Δεν μπόρεσα να ανακτήσω τα δεδομένα καιρού."
-
-                                    logger.info(f"Speaking weather: {forecast}")
-                                    self.speak_with_piper(forecast)
-
-                                except Exception as e:
-                                    logger.error(f"Error during weather playback: {e}")
-                                finally:
-                                    self.play_weather = False
-                                    
-                            # Band Conditions playback
-                            if self.play_band:
-                                try:
-                                    import requests
-                                    import xml.etree.ElementTree as ET
-
-                                    response = requests.get("https://www.hamqsl.com/solarxml.php")
-                                    if response.status_code == 200:
-                                        root = ET.fromstring(response.content)
-                                        data = root.find("solardata")
-
-                                        # Basic space weather
-                                        sfi = data.findtext("solarflux", default="N/A").strip()
-                                        kindex = data.findtext("kindex", default="N/A").strip()
-                                        sunspots = data.findtext("sunspots", default="N/A").strip()
-                                        xray = data.findtext("xray", default="N/A").strip()
-                                        noise = data.findtext("signalnoise", default="N/A").strip()
-
-                                        # HF conditions (daytime)
-                                        bands = data.find("calculatedconditions")
-                                        band_reports = {}
-                                        for band in bands.findall("band"):
-                                            if band.attrib.get("time") == "day":
-                                                band_reports[band.attrib["name"]] = band.text.strip()
-
-                                        # Build Greek report
-                                        band_phrases = []
-                                        greek_band_names = {
-                                            "80m-40m": "80 και 40 μέτρα",
-                                            "30m-20m": "30 και 20 μέτρα",
-                                            "17m-15m": "17 και 15 μέτρα",
-                                            "12m-10m": "12 και 10 μέτρα"
-                                        }
-                                        
-                                        greek_condition_names = {
-                                            "Good": "καλές",
-                                            "Fair": "μέτριες",
-                                            "Poor": "κακές",
-                                        }
-
-                                        for key, condition in band_reports.items():
-                                            greek_band = greek_band_names.get(key, key)
-                                            greek_condition = greek_condition_names.get(condition, condition)
-                                            band_phrases.append(f"{greek_band}: {greek_condition}")
-
-                                        band_phrase = ". ".join(band_phrases)
-                                        full_report = (
-                                            f"Ο δείκτης ηλιακής ροής είναι {sfi}, "
-                                            f"ο δείκτης Κ είναι {kindex}, "
-                                            f"ο αριθμός των ηλιακών κηλίδων είναι {sunspots}, "
-                                            f"και η ακτινοβολία X-ray είναι {xray}. "
-                                            f"Θόρυβος σήματος: {noise}. "
-                                            f"Καταστάσεις HF κατά τη διάρκεια της ημέρας: {band_phrase}."
-                                        )
-
-                                        logger.info(f"Speaking band conditions: {full_report}")
-                                        self.speak_with_piper(full_report)
-                                    else:
-                                        logger.warning("Failed to fetch band condition XML data")
-                                except Exception as e:
-                                    logger.error(f"Error during band conditions playback: {e}")
-                                finally:
-                                    self.play_band = False
 
                             # Custom Modules Playback
                             self.module_manager.check_flags()
