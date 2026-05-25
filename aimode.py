@@ -160,6 +160,84 @@ def call_with_timeout(func, args=(), kwargs=None, timeout=45):
         
         return result[0]
 
+def resolve_device_index(p, device_str, kind='input'):
+    """
+    Resolve a device setting to a PyAudio device index.
+
+    Accepts:
+      - An integer string               -> used directly; -1 means PyAudio default
+      - A partial device name string    -> matched against PyAudio device names; first match wins
+      - Empty string / "-1"             -> returns None (PyAudio default)
+
+    Args:
+        p          : a PyAudio instance
+        device_str : value read from config
+        kind       : 'input' or 'output'
+
+    Returns:
+        int index, or None if the default device should be used
+    """
+    device_str = str(device_str).strip()
+
+    # Empty or explicit "default" tokens -> use PyAudio default
+    if device_str in ('', '-1', 'default', 'none'):
+        return None
+
+    # Pure integer -> use directly
+    if device_str.lstrip('-').isdigit():
+        idx = int(device_str)
+        return None if idx == -1 else idx
+
+    # Name-based lookup
+    name_lower = device_str.lower()
+    num_devices = p.get_device_count()
+
+    matches = []
+    for i in range(num_devices):
+        try:
+            info = p.get_device_info_by_index(i)
+        except Exception:
+            continue
+        # Filter by kind
+        if kind == 'input' and info.get('maxInputChannels', 0) < 1:
+            continue
+        if kind == 'output' and info.get('maxOutputChannels', 0) < 1:
+            continue
+        if name_lower in info['name'].lower():
+            matches.append((i, info['name']))
+
+    if len(matches) == 1:
+        logger.info(
+            f"Audio {kind} device '{device_str}' resolved to "
+            f"index {matches[0][0]}: {matches[0][1]}"
+        )
+        return matches[0][0]
+    elif len(matches) > 1:
+        logger.warning(
+            f"Audio {kind} device name '{device_str}' matched {len(matches)} devices; "
+            f"using first match -> index {matches[0][0]}: {matches[0][1]}"
+        )
+        return matches[0][0]
+    else:
+        # List available devices to help the user diagnose the problem
+        available = []
+        for i in range(num_devices):
+            try:
+                info = p.get_device_info_by_index(i)
+                ch_key = 'maxInputChannels' if kind == 'input' else 'maxOutputChannels'
+                if info.get(ch_key, 0) >= 1:
+                    available.append(f"  [{i}] {info['name']}")
+            except Exception:
+                pass
+        logger.error(
+            f"Audio {kind} device name '{device_str}' not found. "
+            f"Available {kind} devices:\n" + "\n".join(available)
+        )
+        raise ValueError(
+            f"No {kind} device matching '{device_str}' found. "
+            f"Check logs for the available device list."
+        )
+
 class AIConfig:
     """Configuration class for AI mode settings"""
     def __init__(self, config_file='config/settings/aimode_config.ini'):
@@ -181,8 +259,8 @@ class AIConfig:
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
         self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=0.2)
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
-        self.INPUT_DEVICE = self.config.getint('Audio', 'input_device', fallback=-1)
-        self.OUTPUT_DEVICE = self.config.getint('Audio', 'output_device', fallback=-1)
+        self.INPUT_DEVICE = self.config.get('Audio', 'input_device', fallback='-1')
+        self.OUTPUT_DEVICE = self.config.get('Audio', 'output_device', fallback='-1')
         
         # File paths
         self.OUTPUT_FILE = self.config.get('Paths', 'output_file', fallback='audio/temp/recorded_audio.wav')
@@ -215,7 +293,7 @@ class AIConfig:
         self.CONTEXT_TIMEOUT_MINUTES = self.config.getint('Context', 'context_timeout_minutes', fallback=30)
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_ai_temp.wav')
         
         # Thinking Sound Settings
@@ -766,43 +844,50 @@ class TypingSound:
     
     def _generate_melody(self, sample_rate=44100):
         """Generate a thinking melody"""
-        melody_notes = [
-            (440.00, 0.18),  # A4
-            (523.25, 0.18),  # C5
-            (659.25, 0.30),  # E5
-            (523.25, 0.18),  # C5
-            (440.00, 0.18),  # A4
-            (329.63, 0.24),  # E4
-            (440.00, 0.18),  # A4
-            (523.25, 0.36),  # C5
-        ]
-        
-        melody_audio = np.array([], dtype=np.int16)
-        
-        for i, (freq, note_duration) in enumerate(melody_notes):
-            # Gentle volume swell
-            volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
+        def _generate_melody(self, sample_rate=44100):
+            """Generate a thinking melody"""
+            melody_notes = [
+                (440.00, 0.18),  # A4
+                (523.25, 0.18),  # C5
+                (659.25, 0.30),  # E5
+                (523.25, 0.18),  # C5
+                (440.00, 0.18),  # A4
+                (329.63, 0.24),  # E4
+                (440.00, 0.18),  # A4
+                (523.25, 0.36),  # C5
+            ]
             
-            note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
-            melody_audio = np.concatenate([melody_audio, note])
+            melody_audio = np.array([], dtype=np.int16)
             
-            # Very short gap for smooth flow
-            if i < len(melody_notes) - 1:
-                gap_frames = int(0.03 * sample_rate)
-                gap = np.zeros(gap_frames, dtype=np.int16)
-                melody_audio = np.concatenate([melody_audio, gap])
-        
-        # Pause before loop
-        end_pause_frames = int(0.6 * sample_rate)
-        end_pause = np.zeros(end_pause_frames, dtype=np.int16)
-        melody_audio = np.concatenate([melody_audio, end_pause])
-        
-        return melody_audio
+            for i, (freq, note_duration) in enumerate(melody_notes):
+                # Gentle volume swell
+                volume = self.config.THINKING_SOUND_VOLUME * (0.8 + (0.2 * np.sin(i * 0.7)))
+                
+                note = self._generate_tone(freq, note_duration, sample_rate, volume * 0.12)
+                melody_audio = np.concatenate([melody_audio, note])
+                
+                # Very short gap for smooth flow
+                if i < len(melody_notes) - 1:
+                    gap_frames = int(0.03 * sample_rate)
+                    gap = np.zeros(gap_frames, dtype=np.int16)
+                    melody_audio = np.concatenate([melody_audio, gap])
+            
+            # Pause before loop
+            end_pause_frames = int(0.6 * sample_rate)
+            end_pause = np.zeros(end_pause_frames, dtype=np.int16)
+            melody_audio = np.concatenate([melody_audio, end_pause])
+            
+            return melody_audio
     
     def _typing_loop(self):
         """Background thread function for playing the thinking melody"""
         try:
             self.pyaudio_instance = pyaudio.PyAudio()
+
+            # Resolve output device
+            output_device_index = resolve_device_index(
+                self.pyaudio_instance, self.config.OUTPUT_DEVICE, kind='output'
+            )
             
             # Generate the thinking melody
             melody = self._generate_melody()
@@ -813,7 +898,7 @@ class TypingSound:
                 channels=1,
                 rate=44100,
                 output=True,
-                output_device_index=self.config.OUTPUT_DEVICE,
+                output_device_index=output_device_index,
                 frames_per_buffer=1024
             )
             
@@ -915,6 +1000,10 @@ class HamRadioAI:
             
             self.pyaudio_instance = pyaudio.PyAudio()
             logger.info("PyAudio initialized successfully")
+
+            # Resolve device name/index settings
+            self._input_device_index = resolve_device_index(self.pyaudio_instance, self.config.INPUT_DEVICE, kind='input')
+            self._output_device_index = resolve_device_index(self.pyaudio_instance, self.config.OUTPUT_DEVICE, kind='output')
             
             # Log context status
             logger.info(self.context.get_context_summary())
@@ -961,7 +1050,7 @@ class HamRadioAI:
                 channels=self.config.CHANNELS,
                 rate=self.config.RATE,
                 input=True,
-                input_device_index=self.config.INPUT_DEVICE,
+                input_device_index=self._input_device_index,
                 frames_per_buffer=self.config.CHUNK
             )
             yield stream
@@ -1029,7 +1118,7 @@ class HamRadioAI:
                 channels=input_channels,  # Use 1 channel
                 rate=self.config.RATE,
                 input=True,
-                input_device_index=self.config.INPUT_DEVICE,
+                input_device_index=self._input_device_index,
                 frames_per_buffer=self.config.CHUNK
             )
             
@@ -1229,7 +1318,7 @@ class HamRadioAI:
                     channels=wf.getnchannels(),
                     rate=wf.getframerate(),
                     output=True,
-                    output_device_index=self.config.OUTPUT_DEVICE
+                    output_device_index=self._output_device_index
                 )
                 
                 chunk_size = 1024
