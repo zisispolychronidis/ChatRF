@@ -111,6 +111,85 @@ def ensure_directories():
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
 
+def resolve_device_index(p, device_str, kind='input'):
+    """
+    Resolve a device setting to a PyAudio device index.
+
+    Accepts:
+      - An integer string               -> used directly; -1 means PyAudio default
+      - A partial device name string    -> matched against PyAudio device names; first match wins
+      - Empty string / "-1"             -> returns None (PyAudio default)
+
+    Args:
+        p          : a PyAudio instance
+        device_str : value read from config
+        kind       : 'input' or 'output'
+
+    Returns:
+        int index, or None if the default device should be used
+    """
+    device_str = str(device_str).strip()
+
+    # Empty or explicit "default" tokens -> use PyAudio default
+    if device_str in ('', '-1', 'default', 'none'):
+        return None
+
+    # Pure integer -> use directly
+    if device_str.lstrip('-').isdigit():
+        idx = int(device_str)
+        return None if idx == -1 else idx
+
+    # Name-based lookup
+    name_lower = device_str.lower()
+    num_devices = p.get_device_count()
+
+    matches = []
+    for i in range(num_devices):
+        try:
+            info = p.get_device_info_by_index(i)
+        except Exception:
+            continue
+        # Filter by kind
+        if kind == 'input' and info.get('maxInputChannels', 0) < 1:
+            continue
+        if kind == 'output' and info.get('maxOutputChannels', 0) < 1:
+            continue
+        if name_lower in info['name'].lower():
+            matches.append((i, info['name']))
+
+    if len(matches) == 1:
+        logger.info(
+            f"Audio {kind} device '{device_str}' resolved to "
+            f"index {matches[0][0]}: {matches[0][1]}"
+        )
+        return matches[0][0]
+    elif len(matches) > 1:
+        logger.warning(
+            f"Audio {kind} device name '{device_str}' matched {len(matches)} devices; "
+            f"using first match -> index {matches[0][0]}: {matches[0][1]}"
+        )
+        return matches[0][0]
+    else:
+        # List available devices to help the user diagnose the problem
+        available = []
+        for i in range(num_devices):
+            try:
+                info = p.get_device_info_by_index(i)
+                ch_key = 'maxInputChannels' if kind == 'input' else 'maxOutputChannels'
+                if info.get(ch_key, 0) >= 1:
+                    available.append(f"  [{i}] {info['name']}")
+            except Exception:
+                pass
+        logger.error(
+            f"Audio {kind} device name '{device_str}' not found. "
+            f"Available {kind} devices:\n" + "\n".join(available)
+        )
+        raise ValueError(
+            f"No {kind} device matching '{device_str}' found. "
+            f"Check logs for the available device list."
+        )
+
+
 class RepeaterConfig:
     """Configuration class for repeater settings"""
     def __init__(self, args=None, config_file='config/settings/config.ini'):
@@ -134,8 +213,8 @@ class RepeaterConfig:
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
         self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
-        self.INPUT_DEVICE = self.config.getint('Audio', 'input_device', fallback=-1)
-        self.OUTPUT_DEVICE = self.config.getint('Audio', 'output_device', fallback=-1)
+        self.INPUT_DEVICE = self.config.get('Audio', 'input_device', fallback='-1')
+        self.OUTPUT_DEVICE = self.config.get('Audio', 'output_device', fallback='-1')
         
         # Feature flags from arguments
         self.ENABLE_AUDIO_REPEAT = not (args and args.no_audio_repeat)
@@ -217,7 +296,7 @@ class RepeaterConfig:
         }
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-low.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_temp.wav')
         
         # Weather config
@@ -334,7 +413,7 @@ class RepeaterConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-low.onnx',
+            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
             'temp_audio': 'audio/temp/piper_temp.wav'
         }
         
@@ -405,6 +484,7 @@ class HamRepeater:
         
         # Initialize PyAudio
         self.p = pyaudio.PyAudio()
+
         self.input_stream = None
         self.output_stream = None
         self._setup_audio_streams()
@@ -422,12 +502,16 @@ class HamRepeater:
     def _setup_audio_streams(self):
         """Initialize audio input and output streams"""
         try:
+            # Resolve device names/indices once at startup
+            self._input_device_index = resolve_device_index(self.p, self.config.INPUT_DEVICE, kind='input')
+            self._output_device_index = resolve_device_index(self.p, self.config.OUTPUT_DEVICE, kind='output')
+
             self.input_stream = self.p.open(
                 format=self.config.FORMAT,
                 channels=self.config.CHANNELS,
                 rate=self.config.RATE,
                 input=True,
-                input_device_index=self.config.INPUT_DEVICE,
+                input_device_index=self._input_device_index,
                 frames_per_buffer=self.config.CHUNK
             )
             
@@ -492,7 +576,7 @@ class HamRepeater:
                         channels=wf.getnchannels(),
                         rate=wf.getframerate(),
                         output=True,
-                        output_device_index=self.config.OUTPUT_DEVICE
+                        output_device_index=self._output_device_index
                     )
                     
                     framerate = wf.getframerate()
@@ -616,7 +700,7 @@ class HamRepeater:
                 channels=1,
                 rate=self.config.RATE,
                 output=True,
-                output_device_index=self.config.OUTPUT_DEVICE,
+                output_device_index=self._output_device_index,
                 frames_per_buffer=chunk_size
             )
             
@@ -719,7 +803,7 @@ class HamRepeater:
                     channels=1,
                     rate=rate,
                     output=True,
-                    output_device_index=self.config.OUTPUT_DEVICE,
+                    output_device_index=self._output_device_index,
                     frames_per_buffer=1024
                 )
                 
@@ -1231,7 +1315,7 @@ class HamRepeater:
                 channels=1,
                 rate=self.config.RATE,
                 input=True,
-                input_device_index=self.config.INPUT_DEVICE,
+                input_device_index=self._input_device_index,
                 frames_per_buffer=self.config.CHUNK
             )
             logger.info("Recording callsign...")
@@ -1389,7 +1473,7 @@ class HamRepeater:
                                 channels=output_channels,
                                 rate=self.config.RATE,
                                 output=True,
-                                output_device_index=self.config.OUTPUT_DEVICE
+                                output_device_index=self._output_device_index
                             )
                         self.output_stream.write(boosted_data)
                     if talking_time >= self.config.MIN_TALKING:
