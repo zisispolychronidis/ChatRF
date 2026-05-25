@@ -6,7 +6,57 @@ import wave
 import numpy as np
 import time
 import configparser
-from repeater import resolve_device_index
+import logging
+
+logger = logging.getLogger(__name__)
+
+def resolve_device_index(p, device_str, kind='input'):
+    """
+    Resolve a device setting to a PyAudio device index.
+    Accepts an integer string, a partial device name, or '-1'/empty for default.
+    """
+    device_str = str(device_str).strip()
+
+    if device_str in ('', '-1', 'default', 'none'):
+        return None
+
+    if device_str.lstrip('-').isdigit():
+        idx = int(device_str)
+        return None if idx == -1 else idx
+
+    name_lower = device_str.lower()
+    num_devices = p.get_device_count()
+
+    matches = []
+    for i in range(num_devices):
+        try:
+            info = p.get_device_info_by_index(i)
+        except Exception:
+            continue
+        if kind == 'input' and info.get('maxInputChannels', 0) < 1:
+            continue
+        if kind == 'output' and info.get('maxOutputChannels', 0) < 1:
+            continue
+        if name_lower in info['name'].lower():
+            matches.append((i, info['name']))
+
+    if len(matches) == 1:
+        logger.debug(f"Audio {kind} device '{device_str}' resolved to index {matches[0][0]}: {matches[0][1]}")
+        return matches[0][0]
+    elif len(matches) > 1:
+        logger.debug(f"Audio {kind} device name '{device_str}' matched {len(matches)} devices; using first match -> index {matches[0][0]}: {matches[0][1]}")
+        return matches[0][0]
+    else:
+        available = []
+        for i in range(num_devices):
+            try:
+                info = p.get_device_info_by_index(i)
+                if info.get('maxInputChannels' if kind == 'input' else 'maxOutputChannels', 0) >= 1:
+                    available.append(f"  [{i}] {info['name']}")
+            except Exception:
+                pass
+        logger.debug(f"Audio {kind} device name '{device_str}' not found. Available {kind} devices:\n" + "\n".join(available))
+        raise ValueError(f"No {kind} device matching '{device_str}' found. Check logs for the available device list.")
 
 config = configparser.ConfigParser()
 config.read('config/settings/config.ini', encoding='utf-8')
@@ -25,6 +75,12 @@ CHUNK = 1024
 RECORD_SECONDS = 0.4
 INPUT_DEVICE = config.get('Audio', 'input_device', fallback='-1')
 
+# Resolve the device name/index once at startup. A temporary PyAudio instance is used just for the lookup and immediately terminated.
+_temp_pa = pyaudio.PyAudio()
+INPUT_DEVICE_INDEX = resolve_device_index(_temp_pa, INPUT_DEVICE, kind='input')
+_temp_pa.terminate()
+del _temp_pa
+
 class DTMFDetector:
     def __init__(self, debounce_time=1.0):
         self.last_detected_key = None
@@ -37,8 +93,7 @@ class DTMFDetector:
     def detect_dtmf(self):
         """Detects DTMF tones and returns the pressed key, or None if no key is detected or if debouncing."""
         audio = pyaudio.PyAudio()
-        input_device_index = resolve_device_index(audio, INPUT_DEVICE, kind='input')
-        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, input_device_index=input_device_index, frames_per_buffer=CHUNK)
+        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, input_device_index=INPUT_DEVICE_INDEX, frames_per_buffer=CHUNK)
         frames = [stream.read(CHUNK) for _ in range(int(RATE / CHUNK * RECORD_SECONDS))]
         stream.stop_stream()
         stream.close()
