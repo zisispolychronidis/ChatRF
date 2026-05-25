@@ -6,6 +6,7 @@ import wave
 import numpy as np
 import time
 import configparser
+from repeater import resolve_device_index
 
 config = configparser.ConfigParser()
 config.read('config/settings/config.ini', encoding='utf-8')
@@ -22,7 +23,7 @@ CHANNELS = 1
 RATE = 20000
 CHUNK = 1024
 RECORD_SECONDS = 0.4
-INPUT_DEVICE = config.getint('Audio', 'input_device', fallback=-1)
+INPUT_DEVICE = config.get('Audio', 'input_device', fallback='-1')
 
 class DTMFDetector:
     def __init__(self, debounce_time=1.0):
@@ -36,7 +37,8 @@ class DTMFDetector:
     def detect_dtmf(self):
         """Detects DTMF tones and returns the pressed key, or None if no key is detected or if debouncing."""
         audio = pyaudio.PyAudio()
-        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, input_device_index=INPUT_DEVICE, frames_per_buffer=CHUNK)
+        input_device_index = resolve_device_index(audio, INPUT_DEVICE, kind='input')
+        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, input_device_index=input_device_index, frames_per_buffer=CHUNK)
         frames = [stream.read(CHUNK) for _ in range(int(RATE / CHUNK * RECORD_SECONDS))]
         stream.stop_stream()
         stream.close()
