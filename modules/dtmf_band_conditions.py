@@ -77,8 +77,8 @@ class BandConditionsModule(DTMFModule):
                     }
                     greek_location_names = {
                         "northern_hemi": "στο βόρειο ημισφαίριο",
-                        "europe": "στην Ευρώπη",
-                        "north_america": "στην Βόρεια Αμερική",
+                        "europe": "στην Ευρώπη στα 2 μέτρα",
+                        "north_america": "στην Αμερική στα 2 μέτρα",
                         "europe_6m": "στην Ευρώπη στα 6 μέτρα",
                         "europe_4m": "στην Ευρώπη στα 4 μέτρα",
                     }
