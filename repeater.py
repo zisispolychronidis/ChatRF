@@ -1348,7 +1348,7 @@ class HamRepeater:
                 filename
             )
             result = "".join([seg.text for seg in segments]).strip().upper()
-            logger.info(f"Transcribed callsign input: {result}")
+            logger.info(f"Transcribed input: {result}")
             return result
         except Exception as e:
             logger.error(f"Whisper transcription failed: {e}")
