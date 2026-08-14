@@ -299,6 +299,16 @@ class AIConfig:
         # Thinking Sound Settings
         self.THINKING_SOUND_ENABLED = self.config.getboolean('ThinkingSound', 'enabled', fallback=True)
         self.THINKING_SOUND_VOLUME = self.config.getfloat('ThinkingSound', 'volume', fallback=0.6)
+
+        # Phonetic and number maps (hardcoded)
+        self.PHONETIC_MAP = {
+            # English
+            "alpha": "A", "bravo": "B", "charlie": "C", "delta": "D", "echo": "E", "foxtrot": "F",
+            "golf": "G", "hotel": "H", "india": "I", "juliett": "J", "kilo": "K", "lima": "L",
+            "mike": "M", "november": "N", "oscar": "O", "papa": "P", "quebec": "Q", "romeo": "R",
+            "sierra": "S", "tango": "T", "uniform": "U", "victor": "V", "whiskey": "W",
+            "x-ray": "X", "yankee": "Y", "zulu": "Z"
+        }
     
     def _create_default_config(self, config_file):
         """Create a default aimode_config.ini file"""
@@ -1403,6 +1413,23 @@ class HamRadioAI:
                 result.append(current.strip())
 
         return result if result else [text]
+
+    def _phoneticize_callsign(self, callsign):
+            """Convert a callsign to its phonetic spelling using the PHONETIC_MAP."""
+            text = str(callsign).strip()
+            if not text or text.isdigit():
+                return text
+            if not re.search(r"[A-Za-z]", text):
+                return text
+    
+            # Create a reverse mapping for phonetic to letter
+            reverse = {v.lower(): k for k, v in self.config.PHONETIC_MAP.items()}
+    
+            # Phoneticize callsign, preserving non-alphabetic characters
+            return " ".join(
+                reverse.get(ch.lower(), ch) if ch.isalpha() else ch
+                for ch in text.upper()
+            )
         
     def speak_text(self, text):
         """Convert text to speech using Piper with sentence splitting"""
@@ -1427,6 +1454,14 @@ class HamRadioAI:
             for i, sentence in enumerate(sentences):
                 if not sentence.strip():
                     continue
+
+                # Replace callsigns with phonetic spelling
+                sentence = re.sub(
+                    r"\b(?=[A-Z0-9]*[0-9])[A-Z0-9]{3,}\b",
+                    lambda m: self._phoneticize_callsign(m.group(0)),
+                    sentence,
+                    flags=re.IGNORECASE
+                )
                 
                 temp_file = f"audio/temp/piper_ai_temp_{i}.wav"
                 
