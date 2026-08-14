@@ -17,7 +17,6 @@ from pathlib import Path
 from piper import PiperVoice
 from dtmf import detect_dtmf
 from pydub import AudioSegment
-from pydub.playback import play
 from threading import Event
 from collections import deque
 from faster_whisper import WhisperModel
@@ -346,14 +345,14 @@ class RepeaterConfig:
         self.FUN_FACTS_FILE = self.config.get('Database', 'fun_facts_file',
                                              fallback='data/databases/fun_facts.txt')
         
-        # Phonetic and number maps (hardcoded)
+        # Phonetic and number maps
         self.PHONETIC_MAP = {
             # English
             "alpha": "A", "bravo": "B", "charlie": "C", "delta": "D", "echo": "E", "foxtrot": "F",
             "golf": "G", "hotel": "H", "india": "I", "juliett": "J", "kilo": "K", "lima": "L",
             "mike": "M", "november": "N", "oscar": "O", "papa": "P", "quebec": "Q", "romeo": "R",
             "sierra": "S", "tango": "T", "uniform": "U", "victor": "V", "whiskey": "W",
-            "x-ray": "X", "xray": "X", "yankee": "Y", "zulu": "Z",
+            "x-ray": "X", "yankee": "Y", "zulu": "Z",
             # Greek/phonetic variants
             "ΣΙΕΡΑ": "S", "ΒΙΚΤΩΡ": "V", "ΜΑΪΚ": "M", "ΤΑΝΓΚΟ": "T", "ΛΙΜΑ": "L", "ΝΟΒΕΜΠΕΡ": "N",
             "ΟΣΚΑΡ": "O", "ΠΑΠΑ": "P", "ΚΙΛΟ": "K", "ΤΖΟΥΛΙΕΤ": "J", "ΓΚΟΛΦ": "G", "ΕΚΟ": "E",
@@ -535,6 +534,35 @@ class HamRepeater:
             logger.error(f"Continuing without speech-to-text")
             self.whisper_model = None
     
+    def _play_audiosegment(self, audio, volume=1.0, stop_event=None):
+        """Play a pydub AudioSegment through the configured output_device."""
+        stream = self.p.open(
+            format=self.p.get_format_from_width(audio.sample_width),
+            channels=audio.channels,
+            rate=audio.frame_rate,
+            output=True,
+            output_device_index=self._output_device_index
+        )
+        try:
+            raw_data = audio.raw_data
+
+            # Apply volume gain (only meaningful for standard 16-bit PCM)
+            if volume != 1.0 and audio.sample_width == 2:
+                samples = np.frombuffer(raw_data, dtype=np.int16)
+                samples = np.clip(samples * volume, -32768, 32767).astype(np.int16)
+                raw_data = samples.tobytes()
+
+            bytes_per_frame = audio.sample_width * audio.channels
+            chunk_bytes = self.config.CHUNK * bytes_per_frame
+
+            for i in range(0, len(raw_data), chunk_bytes):
+                if stop_event is not None and stop_event.is_set():
+                    break
+                stream.write(raw_data[i:i + chunk_bytes])
+        finally:
+            stream.stop_stream()
+            stream.close()
+
     def play_audio(self, filename, max_duration=None):
         """Play a WAV or MP3 file through the audio output
         
@@ -552,7 +580,6 @@ class HamRepeater:
             if file_ext == 'mp3':
                 # MP3 handling
                 from pydub import AudioSegment
-                from pydub.playback import play
                 
                 audio = AudioSegment.from_mp3(filename)
                 
@@ -566,7 +593,7 @@ class HamRepeater:
                     audio = audio + volume_db
                 else:
                     audio = audio - 60  # Effectively mute
-                play(audio)
+                self._play_audiosegment(audio)
                 
             elif file_ext == 'wav':
                 # WAV handling
@@ -826,7 +853,7 @@ class HamRepeater:
         try:
             sound = AudioSegment.from_wav(filename)
             while not stop_event.is_set():
-                play(sound)
+                self._play_audiosegment(sound, stop_event=stop_event)
         except Exception as e:
             logger.error(f"Error in looping audio: {e}")
     
@@ -907,6 +934,23 @@ class HamRepeater:
 
         return result if result else [text]
 
+    def _phoneticize_callsign(self, callsign):
+        """Convert a callsign to its phonetic spelling using the PHONETIC_MAP."""
+        text = str(callsign).strip()
+        if not text or text.isdigit():
+            return text
+        if not re.search(r"[A-Za-z]", text):
+            return text
+
+        # Create a reverse mapping for phonetic to letter
+        reverse = {v.lower(): k for k, v in self.config.PHONETIC_MAP.items()}
+
+        # Phoneticize callsign, preserving non-alphabetic characters
+        return " ".join(
+            reverse.get(ch.lower(), ch) if ch.isalpha() else ch
+            for ch in text.upper()
+        )
+
     def speak_with_piper(self, text):
         """TTS using Piper"""
         if not self.piper_voice:
@@ -921,7 +965,15 @@ class HamRepeater:
             for i, sentence in enumerate(sentences):
                 if not sentence.strip():
                     continue
-                
+
+                # Replace callsigns with phonetic spelling
+                sentence = re.sub(
+                    r"\b(?=[A-Z0-9]*[0-9])[A-Z0-9]{3,}\b",
+                    lambda m: self._phoneticize_callsign(m.group(0)),
+                    sentence,
+                    flags=re.IGNORECASE
+                )
+
                 temp_file = f"audio/temp/piper_temp_{i}.wav"
                 
                 # Generate speech to WAV file
@@ -1347,7 +1399,7 @@ class HamRepeater:
             segments, _ = self.whisper_model.transcribe(
                 filename
             )
-            result = "".join([seg.text for seg in segments]).strip().upper()
+            result = "".join([seg.text for seg in segments]).strip()
             logger.info(f"Transcribed input: {result}")
             return result
         except Exception as e:
@@ -1355,7 +1407,8 @@ class HamRepeater:
             return ""
             
     def extract_callsign_from_text(self, text):
-        """Callsign identification from text"""
+        """Callsign identification from text (specifically for searching callsigns in speech)"""
+        text = text.upper()
         words = re.sub(r'[^\w\s]', ' ', text).lower().split()
         callsign = ""
         
