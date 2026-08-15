@@ -1337,6 +1337,7 @@ class HamRepeater:
             # Wait if currently talking
             while self.talking:
                 time.sleep(1)
+            logger.info("Playing voice ID...")
             self.play_audio(self.config.REPEATER_INFO_FILE)
             
     def fetch_tles(self):
