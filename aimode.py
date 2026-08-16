@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from faster_whisper import WhisperModel
 from contextlib import contextmanager
 from piper import PiperVoice
+from ai_tool_manager import AIToolManager
 # Detect platform
 IS_UNIX = platform.system() != 'Windows'
 
@@ -591,7 +592,7 @@ class OllamaClient:
             logger.info(f"Model needs loading - using extended timeout: {total_timeout}s (base: {base_timeout}s + load: {load_time}s)")
             return total_timeout
     
-    def chat(self, messages, stream=False, auto_adjust_timeout=True):
+    def chat(self, messages, stream=False, auto_adjust_timeout=True, tools=None):
         """
         Send a chat request to Ollama
         
@@ -599,6 +600,8 @@ class OllamaClient:
             messages: List of message dicts
             stream: Whether to stream the response
             auto_adjust_timeout: Automatically adjust timeout for model loading
+            tools: Optional list of Ollama-format tool schemas. Omitted from the
+                payload entirely when empty/None.
             
         Returns:
             Response dict or generator if streaming
@@ -616,6 +619,9 @@ class OllamaClient:
                 },
                 'stream': stream
             }
+
+            if tools:
+                payload['tools'] = tools
             
             # Determine timeout
             if auto_adjust_timeout:
@@ -973,7 +979,11 @@ class HamRadioAI:
         self.piper_voice = None
         self._load_piper_voice()
         self.ollama_client = OllamaClient(self.config)
-    
+
+        # Load AI tools
+        self.tool_manager = AIToolManager(self)
+        self.tool_manager.load_all_tools()
+
         # Test connection on startup
         if not self.ollama_client.test_connection():
             logger.warning("⚠ Ollama server not accessible - AI will fail until server is available")
@@ -1271,35 +1281,76 @@ class HamRadioAI:
             system_prompt = self.config.load_system_prompt()
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(self.context.get_messages_for_ai())
-            
-            # Call Ollama with automatic timeout adjustment
-            try:
-                response = self.ollama_client.chat(
-                    messages, 
-                    stream=False,
-                    auto_adjust_timeout=self.config.AUTO_ADJUST_TIMEOUT
-                )
-                ai_text = response['message']['content'].strip()
-                
-            except requests.Timeout:
-                timeout_used = self.ollama_client.get_dynamic_timeout(self.config.OLLAMA_MODEL_NAME)
-                logger.error(f"LLM request timed out after {timeout_used}s")
-                fallback_msg = "Συγγνώμη, μου πήρε πολύ χρόνο να απαντήσω. Παρακαλώ δοκιμάστε ξανά."
-                self.context.add_message("assistant", fallback_msg)
-                return fallback_msg
-            
-            except requests.ConnectionError:
-                logger.error(f"Cannot connect to Ollama server at {self.config.get_ollama_base_url()}")
-                fallback_msg = "Συγγνώμη, δεν μπορώ να συνδεθώ με τον διακομιστή. Επικοινωνήστε με τον διαχειριστή."
-                self.context.add_message("assistant", fallback_msg)
-                return fallback_msg
-            
-            except requests.RequestException as e:
-                logger.error(f"Error communicating with Ollama: {e}")
-                fallback_msg = "Συγγνώμη, παρουσιάστηκε σφάλμα κατά την επικοινωνία με τον διακομιστή."
-                self.context.add_message("assistant", fallback_msg)
-                return fallback_msg
-            
+
+            tool_schemas = self.tool_manager.get_schemas()
+            max_tool_rounds = 3  # hard cap
+
+            ai_text = None
+
+            for round_num in range(max_tool_rounds + 1):
+                # Only offer tools while rounds remain; on the last allowed round, force a final answer.
+                offer_tools = tool_schemas if round_num < max_tool_rounds else None
+
+                # Call Ollama with automatic timeout adjustment
+                try:
+                    response = self.ollama_client.chat(
+                        messages,
+                        stream=False,
+                        auto_adjust_timeout=self.config.AUTO_ADJUST_TIMEOUT,
+                        tools=offer_tools
+                    )
+
+                except requests.Timeout:
+                    timeout_used = self.ollama_client.get_dynamic_timeout(self.config.OLLAMA_MODEL_NAME)
+                    logger.error(f"LLM request timed out after {timeout_used}s")
+                    fallback_msg = "Συγγνώμη, μου πήρε πολύ χρόνο να απαντήσω. Παρακαλώ δοκιμάστε ξανά."
+                    self.context.add_message("assistant", fallback_msg)
+                    return fallback_msg
+
+                except requests.ConnectionError:
+                    logger.error(f"Cannot connect to Ollama server at {self.config.get_ollama_base_url()}")
+                    fallback_msg = "Συγγνώμη, δεν μπορώ να συνδεθώ με τον διακομιστή. Επικοινωνήστε με τον διαχειριστή."
+                    self.context.add_message("assistant", fallback_msg)
+                    return fallback_msg
+
+                except requests.RequestException as e:
+                    logger.error(f"Error communicating with Ollama: {e}")
+                    fallback_msg = "Συγγνώμη, παρουσιάστηκε σφάλμα κατά την επικοινωνία με τον διακομιστή."
+                    self.context.add_message("assistant", fallback_msg)
+                    return fallback_msg
+
+                message = response['message']
+                tool_calls = message.get('tool_calls')
+
+                if not tool_calls:
+                    ai_text = message['content'].strip()
+                    break
+
+                # Model wants to call one or more tools. Record its message,
+                # run each tool with a hard timeout, and feed results back.
+                messages.append(message)
+
+                for call in tool_calls:
+                    fn = call.get('function', {})
+                    tool_name = fn.get('name')
+                    tool_args = fn.get('arguments', {}) or {}
+
+                    logger.info(f"LLM requested tool call: {tool_name}({tool_args})")
+                    result = self.tool_manager.execute_tool(tool_name, tool_args)
+                    logger.info(f"Tool '{tool_name}' result: {result}")
+
+                    messages.append({
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": result
+                    })
+                # Loop again so the model can use the tool result(s)
+
+            if ai_text is None:
+                # Exhausted tool rounds without a final answer
+                logger.warning("LLM did not produce a final answer within tool round limit")
+                ai_text = "Συγγνώμη, δεν μπόρεσα να ολοκληρώσω την απάντηση."
+
             if ai_text:
                 logger.info(f"AI Response: {ai_text}")
                 self.context.add_message("assistant", ai_text)
