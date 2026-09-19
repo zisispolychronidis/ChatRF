@@ -294,7 +294,7 @@ class AIConfig:
         self.CONTEXT_TIMEOUT_MINUTES = self.config.getint('Context', 'context_timeout_minutes', fallback=30)
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-joy-medium.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_ai_temp.wav')
         
         # Thinking Sound Settings
@@ -360,7 +360,7 @@ class AIConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
+            'model_path': 'models/el_GR-joy-medium.onnx',
             'temp_audio': 'audio/temp/piper_ai_temp.wav'
         }
         
