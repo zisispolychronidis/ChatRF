@@ -210,6 +210,7 @@ class RepeaterConfig:
         self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=0.2)
         self.SILENCE_TIME = self.config.getfloat('Audio', 'silence_time', fallback=0.5)
         self.AUDIO_BOOST = self.config.getfloat('Audio', 'audio_boost', fallback=5.0)
+        self.AUDIO_BUFFER_MAX_SECONDS = self.config.getfloat('Audio', 'audio_buffer_max_seconds', fallback=300)
         self.INPUT_CHANNEL = self.config.get('Audio', 'input_channel', fallback='left').lower()
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
         self.INPUT_DEVICE = self.config.get('Audio', 'input_device', fallback='-1')
@@ -383,6 +384,7 @@ class RepeaterConfig:
             'min_talking': '0.2',
             'silence_time': '0.5',
             'audio_boost': '5.0',
+            'audio_buffer_max_seconds': '300',
             'output_volume': '1.0',
             'input_device': '-1',
             'output_device': '-1'
@@ -875,7 +877,7 @@ class HamRepeater:
                 logger.info(f"Piper voice loaded: {self.config.PIPER_MODEL_PATH}")
             else:
                 logger.warning(f"Piper model not found: {self.config.PIPER_MODEL_PATH}")
-                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-rapunzelina-low' and put it in models/")
+                logger.warning("Download the Greek model with 'python -m piper.download_voices el_GR-joy-medium' and put it in models/")
         except Exception as e:
             logger.error(f"Failed to load Piper voice: {e}")
             self.piper_voice = None
@@ -1474,6 +1476,9 @@ class HamRepeater:
         
         start_talking = 0
 
+        # Upper bound for the shared audio_buffer (in chunks)
+        max_buffer_chunks = max(1, int(self.config.AUDIO_BUFFER_MAX_SECONDS * self.config.RATE / self.config.CHUNK))
+
         try:
             while True:
                 # Read audio input
@@ -1535,7 +1540,16 @@ class HamRepeater:
                         # Share raw audio chunks with modules
                         if not hasattr(self, 'shared_data'):
                             self.shared_data = {}
-                        self.shared_data.setdefault('audio_buffer', []).append(data)
+
+                        if not was_talking:
+                            # New transmission starts a fresh buffer
+                            self.shared_data['audio_buffer'] = []
+                        audio_buffer = self.shared_data.setdefault('audio_buffer', [])
+                        audio_buffer.append(data)
+                        # A stuck carrier must not grow the buffer forever
+                        if len(audio_buffer) > max_buffer_chunks:
+                            del audio_buffer[:len(audio_buffer) - max_buffer_chunks]
+
                         if not was_talking:
                             # Trigger on_transmission_start event
                             self.module_manager.trigger_event("on_transmission_start")
