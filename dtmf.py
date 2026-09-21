@@ -88,7 +88,7 @@ class DTMFDetector:
         self.debounce_time = debounce_time
     
     def isNumberInArray(self, array, number, offset=5):
-        return any(i in array for i in range(number - offset, number + offset))
+        return bool(np.any((array >= number - offset) & (array < number + offset)))
 
     def detect_dtmf(self):
         """Detects DTMF tones and returns the pressed key, or None if no key is detected or if debouncing."""
@@ -108,12 +108,9 @@ class DTMFDetector:
         waveFile.close()
         
         rate, data = wav.read('file.wav')
-        FourierTransformOfData = np.fft.fft(data, 20000)
-        FourierTransformOfData = np.abs(FourierTransformOfData).astype(int)
-
-        # Filter and find frequencies
+        FourierTransformOfData = np.abs(np.fft.fft(data, 20000)).astype(int)
         LowerBound = 20 * np.average(FourierTransformOfData)
-        FilteredFrequencies = [i for i in range(len(FourierTransformOfData)) if FourierTransformOfData[i] > LowerBound]
+        FilteredFrequencies = np.flatnonzero(FourierTransformOfData > LowerBound)
 
         current_time = time.time()
         
