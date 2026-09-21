@@ -13,6 +13,7 @@ import re
 import platform
 import threading
 import requests
+from collections import deque
 from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -259,6 +260,8 @@ class AIConfig:
         self.CHUNK = self.config.getint('Audio', 'chunk', fallback=1024)
         self.THRESHOLD = self.config.getint('Audio', 'threshold', fallback=500)
         self.MIN_TALKING = self.config.getfloat('Audio', 'min_talking', fallback=0.2)
+        self.PRE_ROLL_SECONDS = self.config.getfloat('Audio', 'pre_roll_seconds', fallback=0.25)
+        self.TAIL_SECONDS = self.config.getfloat('Audio', 'tail_seconds', fallback=0.3)
         self.OUTPUT_VOLUME = self.config.getfloat('Audio', 'output_volume', fallback=1.0)
         self.INPUT_DEVICE = self.config.get('Audio', 'input_device', fallback='-1')
         self.OUTPUT_DEVICE = self.config.get('Audio', 'output_device', fallback='-1')
@@ -294,7 +297,7 @@ class AIConfig:
         self.CONTEXT_TIMEOUT_MINUTES = self.config.getint('Context', 'context_timeout_minutes', fallback=30)
         
         # Piper TTS Settings
-        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-joy-medium.onnx')
+        self.PIPER_MODEL_PATH = self.config.get('Piper', 'model_path', fallback='models/el_GR-rapunzelina-medium.onnx')
         self.PIPER_TEMP_AUDIO = self.config.get('Piper', 'temp_audio', fallback='audio/temp/piper_ai_temp.wav')
         
         # Thinking Sound Settings
@@ -322,6 +325,8 @@ class AIConfig:
             'chunk': '1024',
             'threshold': '500',
             'min_talking': '0.2',
+            'pre_roll_seconds': '0.25',
+            'tail_seconds': '0.3',
             'output_volume': '1.0',
             'input_device': '-1',
             'output_device': '-1'
@@ -360,7 +365,7 @@ class AIConfig:
         }
         
         default_config['Piper'] = {
-            'model_path': 'models/el_GR-joy-medium.onnx',
+            'model_path': 'models/el_GR-rapunzelina-medium.onnx',
             'temp_audio': 'audio/temp/piper_ai_temp.wav'
         }
         
@@ -505,29 +510,32 @@ class OllamaClient:
         try:
             # Normalize the model name first
             normalized_name = self.normalize_model_name(model_name)
-            
-            # Check cache first (valid for 30 seconds)
-            cache_key = normalized_name
-            if cache_key in self.last_model_check:
-                last_check_time = self.last_model_check[cache_key]
-                if time.time() - last_check_time < 30:
-                    return normalized_name in self.loaded_models_cache
-            
-            # Query server for running models
-            running_models = self.get_running_models()
-            
-            # Update cache
-            self.loaded_models_cache = set(running_models.keys())
-            self.last_model_check[cache_key] = time.time()
-            
-            is_loaded = normalized_name in running_models
-            
-            if is_loaded:
-                logger.info(f"✓ Model '{normalized_name}' is already loaded in memory")
+
+            if "cloud" not in normalized_name:
+                # Check cache first (valid for 30 seconds)
+                cache_key = normalized_name
+                if cache_key in self.last_model_check:
+                    last_check_time = self.last_model_check[cache_key]
+                    if time.time() - last_check_time < 30:
+                        return normalized_name in self.loaded_models_cache
+                
+                # Query server for running models
+                running_models = self.get_running_models()
+                
+                # Update cache
+                self.loaded_models_cache = set(running_models.keys())
+                self.last_model_check[cache_key] = time.time()
+                
+                is_loaded = normalized_name in running_models
+                
+                if is_loaded:
+                    logger.info(f"✓ Model '{normalized_name}' is already loaded in memory")
+                else:
+                    logger.info(f"⚠ Model '{normalized_name}' needs to be loaded (will take extra time)")
+                
+                return is_loaded
             else:
-                logger.info(f"⚠ Model '{normalized_name}' needs to be loaded (will take extra time)")
-            
-            return is_loaded
+                return True # It is a cloud model
             
         except Exception as e:
             logger.warning(f"Could not check if model is loaded: {e}")
@@ -552,7 +560,9 @@ class OllamaClient:
             # Simple heuristic based on model name
             model_lower = model_name.lower()
             
-            if any(size in model_lower for size in ['120b', '70b', '65b', '72b']):
+            if "cloud" in model_name:
+                return 10   # Cloud model: 10 seconds
+            elif any(size in model_lower for size in ['120b', '70b', '65b', '72b']):
                 return 120  # Large models: 2 minutes
             elif any(size in model_lower for size in ['30b', '34b']):
                 return 90   # Medium-large: 1.5 minutes
@@ -1120,11 +1130,19 @@ class HamRadioAI:
         
         frames = []
         silent_chunks = 0
-        silence_limit = int(self.config.SILENCE_LIMIT_SECONDS * self.config.RATE / self.config.CHUNK)
+        chunks_per_second = self.config.RATE / self.config.CHUNK
+        silence_limit = int(self.config.SILENCE_LIMIT_SECONDS * chunks_per_second)
         speech_chunks = 0
-        min_speech_chunks = int(self.config.MIN_TALKING * self.config.RATE / self.config.CHUNK)
+        min_speech_chunks = int(self.config.MIN_TALKING * chunks_per_second)
         speaking_started = False
         last_audio_time = time.time()
+        
+        # Pre-roll so the start of the first word is not thrown away
+        pre_roll_chunks = min_speech_chunks + int(self.config.PRE_ROLL_SECONDS * chunks_per_second) + 1
+        pre_roll = deque(maxlen=max(1, pre_roll_chunks))
+        
+        # Short natural tail kept after the last loud chunk
+        tail_chunks = int(self.config.TAIL_SECONDS * chunks_per_second)
         
         # IMPORTANT: Record in mono
         input_channels = 1
@@ -1166,13 +1184,16 @@ class HamRadioAI:
                     logger.error(f"Error reading audio data: {e}")
                     continue
                 
+                # Once speech has started, keep EVERY chunk. Before that, keep a rolling pre-roll.
+                if speaking_started:
+                    frames.append(data)
+                else:
+                    pre_roll.append(data)
+                
                 # Check audio level
                 if np.max(np.abs(audio_np)) < self.config.THRESHOLD:
                     silent_chunks += 1
                     speech_chunks = 0
-
-                    if not speaking_started:
-                        frames.clear()
 
                 else:
                     speech_chunks += 1
@@ -1181,9 +1202,10 @@ class HamRadioAI:
                     # Only start speaking after minimum duration
                     if not speaking_started and speech_chunks >= min_speech_chunks:
                         speaking_started = True
+                        frames.extend(pre_roll)  # includes the current chunk
+                        pre_roll.clear()
 
                     if speaking_started:
-                        frames.append(data)
                         last_audio_time = time.time()
                 
                 # Check if we should stop recording
@@ -1194,6 +1216,11 @@ class HamRadioAI:
             # Stop and close stream
             stream.stop_stream()
             stream.close()
+            
+            # Trim the long trailing silence but keep a short natural tail
+            excess = min(silent_chunks - tail_chunks, len(frames) - 1)
+            if excess > 0:
+                del frames[-excess:]
             
             # Save recorded audio
             if frames:
